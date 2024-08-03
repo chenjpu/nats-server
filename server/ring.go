@@ -10,21 +10,20 @@
 // WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 // See the License for the specific language governing permissions and
 // limitations under the License.
-
 package server
 
 // We wrap to hold onto optional items for /connz.
 type closedClient struct {
-	ConnInfo
-	subs []SubDetail
 	user string
 	acc  string
+	ConnInfo
+	subs []SubDetail
 }
 
 // Fixed sized ringbuffer for closed connections.
 type closedRingBuffer struct {
-	total uint64
 	conns []*closedClient
+	total uint64
 }
 
 // Create a new ring buffer with at most max items.
@@ -40,18 +39,15 @@ func (rb *closedRingBuffer) append(cc *closedClient) {
 	rb.conns[rb.next()] = cc
 	rb.total++
 }
-
 func (rb *closedRingBuffer) next() int {
 	return int(rb.total % uint64(cap(rb.conns)))
 }
-
 func (rb *closedRingBuffer) len() int {
 	if rb.total > uint64(cap(rb.conns)) {
 		return cap(rb.conns)
 	}
 	return int(rb.total)
 }
-
 func (rb *closedRingBuffer) totalConns() uint64 {
 	return rb.total
 }

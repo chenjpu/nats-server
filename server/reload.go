@@ -10,24 +10,21 @@
 // WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 // See the License for the specific language governing permissions and
 // limitations under the License.
-
 package server
 
 import (
 	"crypto/tls"
 	"errors"
 	"fmt"
+	"github.com/klauspost/compress/s2"
+	"github.com/nats-io/jwt/v2"
+	"github.com/nats-io/nuid"
 	"net/url"
 	"reflect"
 	"sort"
 	"strings"
 	"sync/atomic"
 	"time"
-
-	"github.com/klauspost/compress/s2"
-
-	"github.com/nats-io/jwt/v2"
-	"github.com/nats-io/nuid"
 )
 
 // FlagSnapshot captures the server options as specified by CLI flags at
@@ -42,32 +39,24 @@ type reloadContext struct {
 type option interface {
 	// Apply the server option.
 	Apply(server *Server)
-
 	// IsLoggingChange indicates if this option requires reloading the logger.
 	IsLoggingChange() bool
-
 	// IsTraceLevelChange indicates if this option requires reloading cached trace level.
 	// Clients store trace level separately.
 	IsTraceLevelChange() bool
-
 	// IsAuthChange indicates if this option requires reloading authorization.
 	IsAuthChange() bool
-
 	// IsTLSChange indicates if this option requires reloading TLS.
 	IsTLSChange() bool
-
 	// IsClusterPermsChange indicates if this option requires reloading
 	// cluster permissions.
 	IsClusterPermsChange() bool
-
 	// IsClusterPoolSizeOrAccountsChange indicates if this option requires
 	// special handling for changes in cluster's pool size or accounts list.
 	IsClusterPoolSizeOrAccountsChange() bool
-
 	// IsJetStreamChange inidicates a change in the servers config for JetStream.
 	// Account changes will be handled separately in reloadAuthorization.
 	IsJetStreamChange() bool
-
 	// Indicates a change in the server that requires publishing the server's statz
 	IsStatszChange() bool
 }
@@ -78,31 +67,24 @@ type noopOption struct{}
 func (n noopOption) IsLoggingChange() bool {
 	return false
 }
-
 func (n noopOption) IsTraceLevelChange() bool {
 	return false
 }
-
 func (n noopOption) IsAuthChange() bool {
 	return false
 }
-
 func (n noopOption) IsTLSChange() bool {
 	return false
 }
-
 func (n noopOption) IsClusterPermsChange() bool {
 	return false
 }
-
 func (n noopOption) IsClusterPoolSizeOrAccountsChange() bool {
 	return false
 }
-
 func (n noopOption) IsJetStreamChange() bool {
 	return false
 }
-
 func (n noopOption) IsStatszChange() bool {
 	return false
 }
@@ -237,7 +219,6 @@ func (t *tlsOption) Apply(server *Server) {
 	server.mu.Unlock()
 	server.Noticef("Reloaded: tls = %s", message)
 }
-
 func (t *tlsOption) IsTLSChange() bool {
 	return true
 }
@@ -352,7 +333,6 @@ type tagsOption struct {
 func (u *tagsOption) Apply(server *Server) {
 	server.Noticef("Reloaded: tags")
 }
-
 func (u *tagsOption) IsStatszChange() bool {
 	return true
 }
@@ -381,9 +361,9 @@ func (u *nkeysOption) Apply(server *Server) {
 type clusterOption struct {
 	authOption
 	newValue        ClusterOpts
-	permsChanged    bool
 	accsAdded       []string
 	accsRemoved     []string
+	permsChanged    bool
 	poolSizeChanged bool
 	compressChanged bool
 }
@@ -447,15 +427,12 @@ func (c *clusterOption) Apply(s *Server) {
 		s.Warnf(clusterTLSInsecureWarning)
 	}
 }
-
 func (c *clusterOption) IsClusterPermsChange() bool {
 	return c.permsChanged
 }
-
 func (c *clusterOption) IsClusterPoolSizeOrAccountsChange() bool {
 	return c.poolSizeChanged || len(c.accsAdded) > 0 || len(c.accsRemoved) > 0
 }
-
 func (c *clusterOption) diffPoolAndAccounts(old *ClusterOpts) {
 	c.poolSizeChanged = c.newValue.PoolSize != old.PoolSize
 addLoop:
@@ -501,7 +478,6 @@ func (r *routesOption) Apply(server *Server) {
 		server.varzUpdateRouteURLs = true
 	}
 	server.mu.Unlock()
-
 	// Remove routes.
 	for _, remove := range r.remove {
 		for _, client := range routes {
@@ -519,12 +495,10 @@ func (r *routesOption) Apply(server *Server) {
 			}
 		}
 	}
-
 	// Add routes.
 	server.mu.Lock()
 	server.solicitRoutes(r.add, server.getOpts().Cluster.PinnedAccounts)
 	server.mu.Unlock()
-
 	server.Noticef("Reloaded: cluster routes")
 }
 
@@ -549,7 +523,6 @@ func (m *maxConnOption) Apply(server *Server) {
 		i++
 	}
 	server.mu.Unlock()
-
 	if m.newValue > 0 && len(clients) > m.newValue {
 		// Close connections til we are within the limit.
 		var (
@@ -707,11 +680,9 @@ type jetStreamOption struct {
 func (a *jetStreamOption) Apply(s *Server) {
 	s.Noticef("Reloaded: JetStream")
 }
-
 func (jso jetStreamOption) IsJetStreamChange() bool {
 	return true
 }
-
 func (jso jetStreamOption) IsStatszChange() bool {
 	return true
 }
@@ -854,7 +825,6 @@ func (l *leafNodeOption) Apply(s *Server) {
 	if l.compressionChanged {
 		var leafs []*client
 		acceptSideCompOpts := &opts.LeafNode.Compression
-
 		s.mu.RLock()
 		// First, update our internal leaf remote configurations with the new
 		// compress options.
@@ -871,10 +841,8 @@ func (l *leafNodeOption) Apply(s *Server) {
 			lr.Compression = opts.LeafNode.Remotes[i].Compression
 			lr.Unlock()
 		}
-
 		for _, l := range s.leafs {
 			var co *CompressionOpts
-
 			l.mu.Lock()
 			if r := l.leaf.remote; r != nil {
 				co = &r.Compression
@@ -986,7 +954,6 @@ func (s *Server) Reload() error {
 	if configFile == "" {
 		return errors.New("can only reload config when a file is provided using -c or --config")
 	}
-
 	newOpts, err := ProcessConfigFile(configFile)
 	if err != nil {
 		// TODO: Dump previous good config to a .bak file?
@@ -1003,42 +970,32 @@ func (s *Server) Reload() error {
 func (s *Server) ReloadOptions(newOpts *Options) error {
 	s.reloadMu.Lock()
 	defer s.reloadMu.Unlock()
-
 	s.mu.Lock()
-
 	curOpts := s.getOpts()
-
 	// Wipe trusted keys if needed when we have an operator.
 	if len(curOpts.TrustedOperators) > 0 && len(curOpts.TrustedKeys) > 0 {
 		curOpts.TrustedKeys = nil
 	}
-
 	clientOrgPort := curOpts.Port
 	clusterOrgPort := curOpts.Cluster.Port
 	gatewayOrgPort := curOpts.Gateway.Port
 	leafnodesOrgPort := curOpts.LeafNode.Port
 	websocketOrgPort := curOpts.Websocket.Port
 	mqttOrgPort := curOpts.MQTT.Port
-
 	s.mu.Unlock()
-
 	// In case "-cluster ..." was provided through the command line, this will
 	// properly set the Cluster.Host/Port etc...
 	if l := curOpts.Cluster.ListenStr; l != _EMPTY_ {
 		newOpts.Cluster.ListenStr = l
 		overrideCluster(newOpts)
 	}
-
 	// Apply flags over config file settings.
 	newOpts = MergeOptions(newOpts, FlagSnapshot)
-
 	// Need more processing for boolean flags...
 	if FlagSnapshot != nil {
 		applyBoolFlags(newOpts, FlagSnapshot)
 	}
-
 	setBaselineOptions(newOpts)
-
 	// setBaselineOptions sets Port to 0 if set to -1 (RANDOM port)
 	// If that's the case, set it to the saved value when the accept loop was
 	// created.
@@ -1061,13 +1018,10 @@ func (s *Server) ReloadOptions(newOpts *Options) error {
 	if newOpts.MQTT.Port == -1 {
 		newOpts.MQTT.Port = mqttOrgPort
 	}
-
 	if err := s.reloadOptions(curOpts, newOpts); err != nil {
 		return err
 	}
-
 	s.recheckPinnedCerts(curOpts, newOpts)
-
 	s.mu.Lock()
 	s.configTime = time.Now().UTC()
 	s.updateVarzConfigReloadableFields(s.varz)
@@ -1107,18 +1061,15 @@ func (s *Server) reloadOptions(curOpts, newOpts *Options) error {
 	// applications starting NATS Server programmatically).
 	newOpts.CustomClientAuthentication = curOpts.CustomClientAuthentication
 	newOpts.CustomRouterAuthentication = curOpts.CustomRouterAuthentication
-
 	changed, err := s.diffOptions(newOpts)
 	if err != nil {
 		return err
 	}
-
 	if len(changed) != 0 {
 		if err := validateOptions(newOpts); err != nil {
 			return err
 		}
 	}
-
 	// Create a context that is used to pass special info that we may need
 	// while applying the new options.
 	ctx := reloadContext{oldClusterPerms: curOpts.Cluster.Permissions}
@@ -1185,7 +1136,6 @@ func (s *Server) diffOptions(newOpts *Options) ([]option, error) {
 		oldConfig = reflect.ValueOf(s.getOpts()).Elem()
 		newConfig = reflect.ValueOf(newOpts).Elem()
 		diffOpts  = []option{}
-
 		// Need to keep track of whether JS is being disabled
 		// to prevent changing limits at runtime.
 		jsEnabled           = s.JetStreamEnabled()
@@ -1211,7 +1161,6 @@ func (s *Server) diffOptions(newOpts *Options) ([]option, error) {
 		if err := imposeOrder(newValue); err != nil {
 			return nil, err
 		}
-
 		optName := strings.ToLower(field.Name)
 		// accounts and users (referencing accounts) will always differ as accounts
 		// contain internal state, say locks etc..., so we don't bother here.
@@ -1338,7 +1287,6 @@ func (s *Server) diffOptions(newOpts *Options) ([]option, error) {
 		case "gateway":
 			// Not supported for now, but report warning if configuration of gateway
 			// is actually changed so that user knows that it won't take effect.
-
 			// Any deep-equal is likely to fail for when there is a TLSConfig. so
 			// remove for the test.
 			tmpOld := oldValue.(GatewayOpts)
@@ -1347,13 +1295,11 @@ func (s *Server) diffOptions(newOpts *Options) ([]option, error) {
 			tmpNew.TLSConfig = nil
 			tmpOld.tlsConfigOpts = nil
 			tmpNew.tlsConfigOpts = nil
-
 			// Need to do the same for remote gateways' TLS configs.
 			// But we can't just set remotes' TLSConfig to nil otherwise this
 			// would lose the real TLS configuration.
 			tmpOld.Gateways = copyRemoteGWConfigsWithoutTLSConfig(tmpOld.Gateways)
 			tmpNew.Gateways = copyRemoteGWConfigsWithoutTLSConfig(tmpNew.Gateways)
-
 			// If there is really a change prevents reload.
 			if !reflect.DeepEqual(tmpOld, tmpNew) {
 				// See TODO(ik) note below about printing old/new values.
@@ -1400,33 +1346,27 @@ func (s *Server) diffOptions(newOpts *Options) ([]option, error) {
 					}
 				}
 			}
-
 			// Need to do the same for remote leafnodes' TLS configs.
 			// But we can't just set remotes' TLSConfig to nil otherwise this
 			// would lose the real TLS configuration.
 			tmpOld.Remotes = copyRemoteLNConfigForReloadCompare(tmpOld.Remotes)
 			tmpNew.Remotes = copyRemoteLNConfigForReloadCompare(tmpNew.Remotes)
-
 			// Special check for leafnode remotes changes which are not supported right now.
 			leafRemotesChanged := func(a, b LeafNodeOpts) bool {
 				if len(a.Remotes) != len(b.Remotes) {
 					return true
 				}
-
 				// Check whether all remotes URLs are still the same.
 				for _, oldRemote := range a.Remotes {
 					var found bool
-
 					if oldRemote.LocalAccount == _EMPTY_ {
 						oldRemote.LocalAccount = globalAccountName
 					}
-
 					for _, newRemote := range b.Remotes {
 						// Bind to global account in case not defined.
 						if newRemote.LocalAccount == _EMPTY_ {
 							newRemote.LocalAccount = globalAccountName
 						}
-
 						if reflect.DeepEqual(oldRemote, newRemote) {
 							found = true
 							break
@@ -1436,17 +1376,14 @@ func (s *Server) diffOptions(newOpts *Options) ([]option, error) {
 						return true
 					}
 				}
-
 				return false
 			}
-
 			// First check whether remotes changed at all. If they did not,
 			// skip them in the complete equal check.
 			if !leafRemotesChanged(tmpOld, tmpNew) {
 				tmpOld.Remotes = nil
 				tmpNew.Remotes = nil
 			}
-
 			// Special check for auth users to detect changes.
 			// If anything is off will fall through and fail below.
 			// If we detect they are semantically the same we nil them out
@@ -1481,14 +1418,12 @@ func (s *Server) diffOptions(newOpts *Options) ([]option, error) {
 					}
 				}
 			}
-
 			// If there is really a change prevents reload.
 			if !reflect.DeepEqual(tmpOld, tmpNew) {
 				// See TODO(ik) note below about printing old/new values.
 				return nil, fmt.Errorf("config reload not supported for %s: old=%v, new=%v",
 					field.Name, oldValue, newValue)
 			}
-
 			diffOpts = append(diffOpts, &leafNodeOption{
 				tlsFirstChanged:    handshakeFirstChanged,
 				compressionChanged: compressionChanged,
@@ -1499,14 +1434,12 @@ func (s *Server) diffOptions(newOpts *Options) ([]option, error) {
 			if new != old {
 				diffOpts = append(diffOpts, &jetStreamOption{newValue: new})
 			}
-
 			// Mark whether JS will be disabled.
 			disableJS = !new
 		case "storedir":
 			new := newValue.(string)
 			old := oldValue.(string)
 			modified := new != old
-
 			// Check whether JS is being disabled and/or storage dir attempted to change.
 			if jsEnabled && modified {
 				if new == _EMPTY_ {
@@ -1520,7 +1453,6 @@ func (s *Server) diffOptions(newOpts *Options) ([]option, error) {
 		case "jetstreammaxmemory", "jetstreammaxstore":
 			old := oldValue.(int64)
 			new := newValue.(int64)
-
 			// Check whether JS is being disabled and/or limits are being changed.
 			var (
 				modified  = new != old
@@ -1569,7 +1501,6 @@ func (s *Server) diffOptions(newOpts *Options) ([]option, error) {
 			diffOpts = append(diffOpts, &mqttConsumerReplicasReload{newValue: newValue.(MQTTOpts).ConsumerReplicas})
 			diffOpts = append(diffOpts, &mqttConsumerMemoryStorageReload{newValue: newValue.(MQTTOpts).ConsumerMemoryStorage})
 			diffOpts = append(diffOpts, &mqttInactiveThresholdReload{newValue: newValue.(MQTTOpts).ConsumerInactiveThreshold})
-
 			// Nil out/set to 0 the options that we allow to be reloaded so that
 			// we only fail reload if some that we don't support are changed.
 			tmpOld := oldValue.(MQTTOpts)
@@ -1578,7 +1509,6 @@ func (s *Server) diffOptions(newOpts *Options) ([]option, error) {
 			tmpOld.ConsumerInactiveThreshold = 0
 			tmpNew.TLSConfig, tmpNew.tlsConfigOpts, tmpNew.AckWait, tmpNew.MaxAckPending, tmpNew.StreamReplicas, tmpNew.ConsumerReplicas, tmpNew.ConsumerMemoryStorage = nil, nil, 0, 0, 0, 0, false
 			tmpNew.ConsumerInactiveThreshold = 0
-
 			if !reflect.DeepEqual(tmpOld, tmpNew) {
 				// See TODO(ik) note below about printing old/new values.
 				return nil, fmt.Errorf("config reload not supported for %s: old=%v, new=%v",
@@ -1642,13 +1572,11 @@ func (s *Server) diffOptions(newOpts *Options) ([]option, error) {
 			// %v is difficult to figure what's what, %+v print private fields and
 			// would print passwords. Tried json.Marshal but it is too verbose for
 			// the URL array.
-
 			// Bail out if attempting to reload any unsupported options.
 			return nil, fmt.Errorf("config reload not supported for %s: old=%v, new=%v",
 				field.Name, oldValue, newValue)
 		}
 	}
-
 	// If not disabling JS but limits have changed then it is an error.
 	if !disableJS {
 		if jsMemLimitsChanged || jsFileLimitsChanged {
@@ -1658,10 +1586,8 @@ func (s *Server) diffOptions(newOpts *Options) ([]option, error) {
 			return nil, fmt.Errorf("config reload not supported for jetstream storage dir")
 		}
 	}
-
 	return diffOpts, nil
 }
-
 func copyRemoteGWConfigsWithoutTLSConfig(current []*RemoteGatewayOpts) []*RemoteGatewayOpts {
 	l := len(current)
 	if l == 0 {
@@ -1676,7 +1602,6 @@ func copyRemoteGWConfigsWithoutTLSConfig(current []*RemoteGatewayOpts) []*Remote
 	}
 	return rgws
 }
-
 func copyRemoteLNConfigForReloadCompare(current []*RemoteLeafOpts) []*RemoteLeafOpts {
 	l := len(current)
 	if l == 0 {
@@ -1700,7 +1625,6 @@ func copyRemoteLNConfigForReloadCompare(current []*RemoteLeafOpts) []*RemoteLeaf
 	}
 	return rlns
 }
-
 func (s *Server) applyOptions(ctx *reloadContext, opts []option) {
 	var (
 		reloadLogging      = false
@@ -1737,7 +1661,6 @@ func (s *Server) applyOptions(ctx *reloadContext, opts []option) {
 			isStatszChange = true
 		}
 	}
-
 	if reloadLogging {
 		s.ConfigureLogger()
 	}
@@ -1769,7 +1692,6 @@ func (s *Server) applyOptions(ctx *reloadContext, opts []option) {
 	if isStatszChange {
 		s.sendStatszUpdate()
 	}
-
 	// For remote gateways and leafnodes, make sure that their TLS configuration
 	// is updated (since the config is "captured" early and changes would otherwise
 	// not be visible).
@@ -1779,12 +1701,10 @@ func (s *Server) applyOptions(ctx *reloadContext, opts []option) {
 	if len(newOpts.LeafNode.Remotes) > 0 {
 		s.updateRemoteLeafNodesTLSConfig(newOpts)
 	}
-
 	// Always restart OCSP monitoring on reload.
 	if err := s.reloadOCSP(); err != nil {
 		s.Warnf("Can't restart OCSP features: %v", err)
 	}
-
 	s.Noticef("Reloaded server configuration")
 }
 
@@ -1797,7 +1717,6 @@ func (s *Server) resetInternalLoopInfo() {
 		resetCh = s.sys.resetCh
 	}
 	s.mu.Unlock()
-
 	if resetCh != nil {
 		resetCh <- struct{}{}
 	}
@@ -1806,29 +1725,22 @@ func (s *Server) resetInternalLoopInfo() {
 // Update all cached debug and trace settings for every client
 func (s *Server) reloadClientTraceLevel() {
 	opts := s.getOpts()
-
 	if opts.NoLog {
 		return
 	}
-
 	// Create a list of all clients.
 	// Update their trace level when not holding server or gateway lock
-
 	s.mu.Lock()
 	clientCnt := 1 + len(s.clients) + len(s.grTmpClients) + s.numRoutes() + len(s.leafs)
 	s.mu.Unlock()
-
 	s.gateway.RLock()
 	clientCnt += len(s.gateway.in) + len(s.gateway.outo)
 	s.gateway.RUnlock()
-
 	clients := make([]*client, 0, clientCnt)
-
 	s.mu.Lock()
 	if s.eventsEnabled() {
 		clients = append(clients, s.sys.client)
 	}
-
 	cMaps := []map[uint64]*client{s.clients, s.grTmpClients, s.leafs}
 	for _, m := range cMaps {
 		for _, c := range m {
@@ -1839,14 +1751,12 @@ func (s *Server) reloadClientTraceLevel() {
 		clients = append(clients, c)
 	})
 	s.mu.Unlock()
-
 	s.gateway.RLock()
 	for _, c := range s.gateway.in {
 		clients = append(clients, c)
 	}
 	clients = append(clients, s.gateway.outo...)
 	s.gateway.RUnlock()
-
 	for _, c := range clients {
 		// client.trace is commonly read while holding the lock
 		c.mu.Lock()
@@ -1865,9 +1775,7 @@ func (s *Server) reloadAuthorization() {
 	checkJetStream := false
 	opts := s.getOpts()
 	s.mu.Lock()
-
 	deletedAccounts := make(map[string]*Account)
-
 	// This can not be changed for now so ok to check server's trustedKeys unlocked.
 	// If plain configured accounts, process here.
 	if s.trustedKeys == nil {
@@ -1931,7 +1839,6 @@ func (s *Server) reloadAuthorization() {
 			})
 		}
 	}
-
 	var (
 		cclientsa [64]*client
 		cclients  = cclientsa[:0]
@@ -1940,7 +1847,6 @@ func (s *Server) reloadAuthorization() {
 		routesa   [64]*client
 		routes    = routesa[:0]
 	)
-
 	// Gather clients that changed accounts. We will close them and they
 	// will reconnect, doing the right thing.
 	for _, client := range s.clients {
@@ -1957,7 +1863,6 @@ func (s *Server) reloadAuthorization() {
 	if s.sys != nil && s.sys.account != nil && !opts.NoSystemAccount {
 		s.accounts.Store(s.sys.account.Name, s.sys.account)
 	}
-
 	s.accounts.Range(func(k, v any) bool {
 		acc := v.(*Account)
 		acc.mu.RLock()
@@ -1972,14 +1877,12 @@ func (s *Server) reloadAuthorization() {
 		acc.mu.RUnlock()
 		return true
 	})
-
 	var resetCh chan struct{}
 	if s.sys != nil {
 		// can't hold the lock as go routine reading it may be waiting for lock as well
 		resetCh = s.sys.resetCh
 	}
 	s.mu.Unlock()
-
 	// Clear some timers and remove service import subs for deleted accounts.
 	for _, acc := range deletedAccounts {
 		acc.mu.Lock()
@@ -1991,19 +1894,15 @@ func (s *Server) reloadAuthorization() {
 		acc.mu.Unlock()
 		acc.removeAllServiceImportSubs()
 	}
-
 	if resetCh != nil {
 		resetCh <- struct{}{}
 	}
-
 	// Check that publish retained messages sources are still allowed to publish.
 	s.mqttCheckPubRetainedPerms()
-
 	// Close clients that have moved accounts
 	for _, client := range cclients {
 		client.closeConnection(ClientClosed)
 	}
-
 	for _, c := range clients {
 		// Disconnect any unauthorized clients.
 		// Ignore internal clients.
@@ -2016,7 +1915,6 @@ func (s *Server) reloadAuthorization() {
 		// Remove any unauthorized subscriptions and check for account imports.
 		c.processSubsOnConfigReload(awcsti)
 	}
-
 	for _, route := range routes {
 		// Disconnect any unauthorized routes.
 		// Do this only for routes that were accepted, not initiated
@@ -2027,11 +1925,9 @@ func (s *Server) reloadAuthorization() {
 			route.authViolation()
 		}
 	}
-
 	if res := s.AccountResolver(); res != nil {
 		res.Reload()
 	}
-
 	// We will double check all JetStream configs on a reload.
 	if checkJetStream {
 		if err := s.enableJetStreamAccounts(); err != nil {
@@ -2101,7 +1997,6 @@ func (s *Server) reloadClusterPermissions(oldPerms *RoutePermissions) {
 	}
 	infoJSON := generateInfoJSON(&s.routeInfo)
 	s.mu.Unlock()
-
 	// Close connections for routes that don't understand async INFO.
 	for _, route := range routes {
 		route.mu.Lock()
@@ -2113,25 +2008,21 @@ func (s *Server) reloadClusterPermissions(oldPerms *RoutePermissions) {
 			delete(routes, cid)
 		}
 	}
-
 	// If there are no route left, we are done
 	if len(routes) == 0 {
 		return
 	}
-
 	// Fake clients to test cluster permissions
 	oldPermsTester := &client{}
 	oldPermsTester.setRoutePermissions(oldPerms)
 	newPermsTester := &client{}
 	newPermsTester.setRoutePermissions(newPerms)
-
 	var (
 		_localSubs       [4096]*subscription
 		subsNeedSUB      = map[*client][]*subscription{}
 		subsNeedUNSUB    = map[*client][]*subscription{}
 		deleteRoutedSubs []*subscription
 	)
-
 	getRouteForAccount := func(accName string, poolIdx int) *client {
 		for _, r := range routes {
 			r.mu.Lock()
@@ -2143,14 +2034,12 @@ func (s *Server) reloadClusterPermissions(oldPerms *RoutePermissions) {
 		}
 		return nil
 	}
-
 	// First set the new permissions on all routes.
 	for _, route := range routes {
 		route.mu.Lock()
 		route.setRoutePermissions(newPerms)
 		route.mu.Unlock()
 	}
-
 	// Then, go over all accounts and gather local subscriptions that need to be
 	// sent over as SUB or removed as UNSUB, and routed subscriptions that need
 	// to be dropped due to export permissions.
@@ -2166,7 +2055,6 @@ func (s *Server) reloadClusterPermissions(oldPerms *RoutePermissions) {
 		}
 		localSubs := _localSubs[:0]
 		sl.localSubs(&localSubs, false)
-
 		// Go through all local subscriptions
 		for _, sub := range localSubs {
 			// Get all subs that can now be imported
@@ -2203,7 +2091,6 @@ func (s *Server) reloadClusterPermissions(oldPerms *RoutePermissions) {
 		sl.RemoveBatch(deleteRoutedSubs)
 		return true
 	})
-
 	// Send an update INFO, which will allow remote server to show
 	// our current route config in monitoring and resend subscriptions
 	// that we now possibly allow with a change of Export permissions.
@@ -2220,7 +2107,6 @@ func (s *Server) reloadClusterPermissions(oldPerms *RoutePermissions) {
 		route.mu.Unlock()
 	}
 }
-
 func (s *Server) reloadClusterPoolAndAccounts(co *clusterOption, opts *Options) {
 	s.mu.Lock()
 	// Prevent adding new routes until we are ready to do so.
@@ -2319,7 +2205,6 @@ func (s *Server) reloadClusterPoolAndAccounts(co *clusterOption, opts *Options) 
 	// processing new per-account routes.
 	if len(routes) > 0 || len(ch) > 0 {
 		s.mu.Unlock()
-
 		for done := false; !done && len(ch) > 0; {
 			select {
 			case <-ch:
@@ -2328,11 +2213,9 @@ func (s *Server) reloadClusterPoolAndAccounts(co *clusterOption, opts *Options) 
 				done = true
 			}
 		}
-
 		for r := range routes {
 			r.closeConnection(RouteRemoved)
 		}
-
 		s.mu.Lock()
 	}
 	// Clear the accAddedCh/ReqID fields in case they were set.
@@ -2350,7 +2233,6 @@ func (s *Server) reloadClusterPoolAndAccounts(co *clusterOption, opts *Options) 
 	}
 	// We have already added the accounts to s.accRoutes that needed to
 	// be added.
-
 	// We should always have at least the system account with a dedicated route,
 	// but in case we have a configuration that disables pooling and without
 	// a system account, possibly set the accRoutes to nil.
@@ -2443,7 +2325,6 @@ removeLoop:
 		}
 		remove = append(remove, oldRoute)
 	}
-
 	// Find routes to add.
 addLoop:
 	for _, newRoute := range new {
@@ -2454,6 +2335,5 @@ addLoop:
 		}
 		add = append(add, newRoute)
 	}
-
 	return add, remove
 }

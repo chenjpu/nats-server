@@ -10,7 +10,6 @@
 // WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 // See the License for the specific language governing permissions and
 // limitations under the License.
-
 package server
 
 import (
@@ -20,6 +19,11 @@ import (
 	"errors"
 	"flag"
 	"fmt"
+	"github.com/nats-io/jwt/v2"
+	"github.com/nats-io/nats-server/v2/conf"
+	"github.com/nats-io/nats-server/v2/server/certidp"
+	"github.com/nats-io/nats-server/v2/server/certstore"
+	"github.com/nats-io/nkeys"
 	"math"
 	"net"
 	"net/url"
@@ -32,12 +36,6 @@ import (
 	"strings"
 	"sync/atomic"
 	"time"
-
-	"github.com/nats-io/jwt/v2"
-	"github.com/nats-io/nats-server/v2/conf"
-	"github.com/nats-io/nats-server/v2/server/certidp"
-	"github.com/nats-io/nats-server/v2/server/certstore"
-	"github.com/nats-io/nkeys"
 )
 
 var allowUnknownTopLevelField = int32(0)
@@ -61,32 +59,31 @@ type PinnedCertSet map[string]struct{}
 // NOTE: This structure is no longer used for monitoring endpoints
 // and json tags are deprecated and may be removed in the future.
 type ClusterOpts struct {
-	Name              string            `json:"-"`
-	Host              string            `json:"addr,omitempty"`
-	Port              int               `json:"cluster_port,omitempty"`
-	Username          string            `json:"-"`
-	Password          string            `json:"-"`
-	AuthTimeout       float64           `json:"auth_timeout,omitempty"`
-	Permissions       *RoutePermissions `json:"-"`
-	TLSTimeout        float64           `json:"-"`
-	TLSConfig         *tls.Config       `json:"-"`
-	TLSMap            bool              `json:"-"`
-	TLSCheckKnownURLs bool              `json:"-"`
-	TLSPinnedCerts    PinnedCertSet     `json:"-"`
-	ListenStr         string            `json:"-"`
-	Advertise         string            `json:"-"`
-	NoAdvertise       bool              `json:"-"`
-	ConnectRetries    int               `json:"-"`
-	PoolSize          int               `json:"-"`
-	PinnedAccounts    []string          `json:"-"`
-	Compression       CompressionOpts   `json:"-"`
-	PingInterval      time.Duration     `json:"-"`
-	MaxPingsOut       int               `json:"-"`
-
 	// Not exported (used in tests)
-	resolver netResolver
+	resolver       netResolver
+	Permissions    *RoutePermissions `json:"-"`
+	TLSConfig      *tls.Config       `json:"-"`
+	TLSPinnedCerts PinnedCertSet     `json:"-"`
 	// Snapshot of configured TLS options.
-	tlsConfigOpts *TLSConfigOpts
+	tlsConfigOpts     *TLSConfigOpts
+	Name              string          `json:"-"`
+	Host              string          `json:"addr,omitempty"`
+	Username          string          `json:"-"`
+	Password          string          `json:"-"`
+	ListenStr         string          `json:"-"`
+	Advertise         string          `json:"-"`
+	Compression       CompressionOpts `json:"-"`
+	PinnedAccounts    []string        `json:"-"`
+	Port              int             `json:"cluster_port,omitempty"`
+	AuthTimeout       float64         `json:"auth_timeout,omitempty"`
+	TLSTimeout        float64         `json:"-"`
+	ConnectRetries    int             `json:"-"`
+	PoolSize          int             `json:"-"`
+	PingInterval      time.Duration   `json:"-"`
+	MaxPingsOut       int             `json:"-"`
+	TLSMap            bool            `json:"-"`
+	TLSCheckKnownURLs bool            `json:"-"`
+	NoAdvertise       bool            `json:"-"`
 }
 
 // CompressionOpts defines the compression mode and optional configuration.
@@ -108,80 +105,73 @@ type CompressionOpts struct {
 // NOTE: This structure is no longer used for monitoring endpoints
 // and json tags are deprecated and may be removed in the future.
 type GatewayOpts struct {
+	// Not exported, for tests.
+	resolver       netResolver
+	TLSConfig      *tls.Config   `json:"-"`
+	TLSPinnedCerts PinnedCertSet `json:"-"`
+	// Snapshot of configured TLS options.
+	tlsConfigOpts     *TLSConfigOpts
 	Name              string               `json:"name"`
 	Host              string               `json:"addr,omitempty"`
-	Port              int                  `json:"port,omitempty"`
 	Username          string               `json:"-"`
 	Password          string               `json:"-"`
-	AuthTimeout       float64              `json:"auth_timeout,omitempty"`
-	TLSConfig         *tls.Config          `json:"-"`
-	TLSTimeout        float64              `json:"tls_timeout,omitempty"`
-	TLSMap            bool                 `json:"-"`
-	TLSCheckKnownURLs bool                 `json:"-"`
-	TLSPinnedCerts    PinnedCertSet        `json:"-"`
 	Advertise         string               `json:"advertise,omitempty"`
-	ConnectRetries    int                  `json:"connect_retries,omitempty"`
 	Gateways          []*RemoteGatewayOpts `json:"gateways,omitempty"`
-	RejectUnknown     bool                 `json:"reject_unknown,omitempty"` // config got renamed to reject_unknown_cluster
-
-	// Not exported, for tests.
-	resolver         netResolver
-	sendQSubsBufSize int
-
-	// Snapshot of configured TLS options.
-	tlsConfigOpts *TLSConfigOpts
+	Port              int                  `json:"port,omitempty"`
+	AuthTimeout       float64              `json:"auth_timeout,omitempty"`
+	TLSTimeout        float64              `json:"tls_timeout,omitempty"`
+	ConnectRetries    int                  `json:"connect_retries,omitempty"`
+	sendQSubsBufSize  int
+	TLSMap            bool `json:"-"`
+	TLSCheckKnownURLs bool `json:"-"`
+	RejectUnknown     bool `json:"reject_unknown,omitempty"` // config got renamed to reject_unknown_cluster
 }
 
 // RemoteGatewayOpts are options for connecting to a remote gateway
 // NOTE: This structure is no longer used for monitoring endpoints
 // and json tags are deprecated and may be removed in the future.
 type RemoteGatewayOpts struct {
-	Name          string      `json:"name"`
 	TLSConfig     *tls.Config `json:"-"`
-	TLSTimeout    float64     `json:"tls_timeout,omitempty"`
-	URLs          []*url.URL  `json:"urls,omitempty"`
 	tlsConfigOpts *TLSConfigOpts
+	Name          string     `json:"name"`
+	URLs          []*url.URL `json:"urls,omitempty"`
+	TLSTimeout    float64    `json:"tls_timeout,omitempty"`
 }
 
 // LeafNodeOpts are options for a given server to accept leaf node connections and/or connect to a remote cluster.
 type LeafNodeOpts struct {
-	Host              string        `json:"addr,omitempty"`
-	Port              int           `json:"port,omitempty"`
-	Username          string        `json:"-"`
-	Password          string        `json:"-"`
-	Nkey              string        `json:"-"`
-	Account           string        `json:"-"`
-	Users             []*User       `json:"-"`
-	AuthTimeout       float64       `json:"auth_timeout,omitempty"`
-	TLSConfig         *tls.Config   `json:"-"`
-	TLSTimeout        float64       `json:"tls_timeout,omitempty"`
-	TLSMap            bool          `json:"-"`
-	TLSPinnedCerts    PinnedCertSet `json:"-"`
-	TLSHandshakeFirst bool          `json:"-"`
-	Advertise         string        `json:"-"`
-	NoAdvertise       bool          `json:"-"`
-	ReconnectInterval time.Duration `json:"-"`
-
-	// Compression options
-	Compression CompressionOpts `json:"-"`
-
-	// For solicited connections to other clusters/superclusters.
-	Remotes []*RemoteLeafOpts `json:"remotes,omitempty"`
-
+	// Not exported, for tests.
+	resolver       netResolver
+	TLSConfig      *tls.Config   `json:"-"`
+	TLSPinnedCerts PinnedCertSet `json:"-"`
+	// Snapshot of configured TLS options.
+	tlsConfigOpts *TLSConfigOpts
+	Host          string `json:"addr,omitempty"`
+	Username      string `json:"-"`
+	Password      string `json:"-"`
+	Nkey          string `json:"-"`
+	Account       string `json:"-"`
+	Advertise     string `json:"-"`
 	// This is the minimum version that is accepted for remote connections.
 	// Note that since the server version in the CONNECT protocol was added
 	// only starting at v2.8.0, any version below that will be rejected
 	// (since empty version string in CONNECT would fail the "version at
 	// least" test).
 	MinVersion string
-
-	// Not exported, for tests.
-	resolver    netResolver
-	dialTimeout time.Duration
-	connDelay   time.Duration
-
-	// Snapshot of configured TLS options.
-	tlsConfigOpts *TLSConfigOpts
+	// Compression options
+	Compression CompressionOpts `json:"-"`
+	Users       []*User         `json:"-"`
+	// For solicited connections to other clusters/superclusters.
+	Remotes           []*RemoteLeafOpts `json:"remotes,omitempty"`
+	Port              int               `json:"port,omitempty"`
+	AuthTimeout       float64           `json:"auth_timeout,omitempty"`
+	TLSTimeout        float64           `json:"tls_timeout,omitempty"`
+	ReconnectInterval time.Duration     `json:"-"`
+	dialTimeout       time.Duration
+	connDelay         time.Duration
+	TLSMap            bool `json:"-"`
+	TLSHandshakeFirst bool `json:"-"`
+	NoAdvertise       bool `json:"-"`
 }
 
 // SignatureHandler is used to sign a nonce from the server while
@@ -191,29 +181,23 @@ type SignatureHandler func([]byte) (string, []byte, error)
 
 // RemoteLeafOpts are options for connecting to a remote server as a leaf node.
 type RemoteLeafOpts struct {
-	LocalAccount      string           `json:"local_account,omitempty"`
-	NoRandomize       bool             `json:"-"`
-	URLs              []*url.URL       `json:"urls,omitempty"`
-	Credentials       string           `json:"-"`
-	Nkey              string           `json:"-"`
-	SignatureCB       SignatureHandler `json:"-"`
-	TLS               bool             `json:"-"`
-	TLSConfig         *tls.Config      `json:"-"`
-	TLSTimeout        float64          `json:"tls_timeout,omitempty"`
-	TLSHandshakeFirst bool             `json:"-"`
-	Hub               bool             `json:"hub,omitempty"`
-	DenyImports       []string         `json:"-"`
-	DenyExports       []string         `json:"-"`
-
+	SignatureCB   SignatureHandler `json:"-"`
+	TLSConfig     *tls.Config      `json:"-"`
+	tlsConfigOpts *TLSConfigOpts
+	LocalAccount  string `json:"local_account,omitempty"`
+	Credentials   string `json:"-"`
+	Nkey          string `json:"-"`
+	// Compression options for this remote. Each remote could have a different
+	// setting and also be different from the LeafNode options.
+	Compression CompressionOpts `json:"-"`
+	URLs        []*url.URL      `json:"urls,omitempty"`
+	DenyImports []string        `json:"-"`
+	DenyExports []string        `json:"-"`
+	TLSTimeout  float64         `json:"tls_timeout,omitempty"`
 	// FirstInfoTimeout is the amount of time the server will wait for the
 	// initial INFO protocol from the remote server before closing the
 	// connection.
 	FirstInfoTimeout time.Duration `json:"-"`
-
-	// Compression options for this remote. Each remote could have a different
-	// setting and also be different from the LeafNode options.
-	Compression CompressionOpts `json:"-"`
-
 	// When an URL has the "ws" (or "wss") scheme, then the server will initiate the
 	// connection as a websocket connection. By default, the websocket frames will be
 	// masked (as if this server was a websocket client to the remote server). The
@@ -222,23 +206,22 @@ type RemoteLeafOpts struct {
 		Compression bool `json:"-"`
 		NoMasking   bool `json:"-"`
 	}
-
-	tlsConfigOpts *TLSConfigOpts
-
+	NoRandomize       bool `json:"-"`
+	TLS               bool `json:"-"`
+	TLSHandshakeFirst bool `json:"-"`
+	Hub               bool `json:"hub,omitempty"`
 	// If we are clustered and our local account has JetStream, if apps are accessing
 	// a stream or consumer leader through this LN and it gets dropped, the apps will
 	// not be able to work. This tells the system to migrate the leaders away from this server.
 	// This only changes leader for R>1 assets.
 	JetStreamClusterMigrate bool `json:"jetstream_cluster_migrate,omitempty"`
 }
-
 type JSLimitOpts struct {
 	MaxRequestBatch int           `json:"max_request_batch,omitempty"`
 	MaxAckPending   int           `json:"max_ack_pending,omitempty"`
 	MaxHAAssets     int           `json:"max_ha_assets,omitempty"`
 	Duplicates      time.Duration `json:"max_duplicate_window,omitempty"`
 }
-
 type JSTpmOpts struct {
 	KeysFile    string
 	KeyPassword string
@@ -266,200 +249,186 @@ type AuthCallout struct {
 // NOTE: This structure is no longer used for monitoring endpoints
 // and json tags are deprecated and may be removed in the future.
 type Options struct {
-	ConfigFile            string        `json:"-"`
-	ServerName            string        `json:"server_name"`
-	Host                  string        `json:"addr"`
-	Port                  int           `json:"port"`
-	DontListen            bool          `json:"dont_listen"`
-	ClientAdvertise       string        `json:"-"`
-	Trace                 bool          `json:"-"`
-	Debug                 bool          `json:"-"`
-	TraceVerbose          bool          `json:"-"`
-	NoLog                 bool          `json:"-"`
-	NoSigs                bool          `json:"-"`
-	NoSublistCache        bool          `json:"-"`
-	NoHeaderSupport       bool          `json:"-"`
-	DisableShortFirstPing bool          `json:"-"`
-	Logtime               bool          `json:"-"`
-	LogtimeUTC            bool          `json:"-"`
-	MaxConn               int           `json:"max_connections"`
-	MaxSubs               int           `json:"max_subscriptions,omitempty"`
-	MaxSubTokens          uint8         `json:"-"`
-	Nkeys                 []*NkeyUser   `json:"-"`
-	Users                 []*User       `json:"-"`
-	Accounts              []*Account    `json:"-"`
-	NoAuthUser            string        `json:"-"`
-	SystemAccount         string        `json:"-"`
-	NoSystemAccount       bool          `json:"-"`
-	Username              string        `json:"-"`
-	Password              string        `json:"-"`
-	Authorization         string        `json:"-"`
-	AuthCallout           *AuthCallout  `json:"-"`
-	PingInterval          time.Duration `json:"ping_interval"`
-	MaxPingsOut           int           `json:"ping_max"`
-	HTTPHost              string        `json:"http_host"`
-	HTTPPort              int           `json:"http_port"`
-	HTTPBasePath          string        `json:"http_base_path"`
-	HTTPSPort             int           `json:"https_port"`
-	AuthTimeout           float64       `json:"auth_timeout"`
-	MaxControlLine        int32         `json:"max_control_line"`
-	MaxPayload            int32         `json:"max_payload"`
-	MaxPending            int64         `json:"max_pending"`
-	Cluster               ClusterOpts   `json:"cluster,omitempty"`
-	Gateway               GatewayOpts   `json:"gateway,omitempty"`
-	LeafNode              LeafNodeOpts  `json:"leaf,omitempty"`
-	JetStream             bool          `json:"jetstream"`
-	JetStreamMaxMemory    int64         `json:"-"`
-	JetStreamMaxStore     int64         `json:"-"`
-	JetStreamDomain       string        `json:"-"`
-	JetStreamExtHint      string        `json:"-"`
-	JetStreamKey          string        `json:"-"`
-	JetStreamOldKey       string        `json:"-"`
-	JetStreamCipher       StoreCipher   `json:"-"`
-	JetStreamUniqueTag    string
-	JetStreamLimits       JSLimitOpts
-	JetStreamTpm          JSTpmOpts
-	JetStreamMaxCatchup   int64
-	StoreDir              string            `json:"-"`
-	SyncInterval          time.Duration     `json:"-"`
-	SyncAlways            bool              `json:"-"`
-	JsAccDefaultDomain    map[string]string `json:"-"` // account to domain name mapping
-	Websocket             WebsocketOpts     `json:"-"`
-	MQTT                  MQTTOpts          `json:"-"`
-	ProfPort              int               `json:"-"`
-	ProfBlockRate         int               `json:"-"`
-	PidFile               string            `json:"-"`
-	PortsFileDir          string            `json:"-"`
-	LogFile               string            `json:"-"`
-	LogSizeLimit          int64             `json:"-"`
-	LogMaxFiles           int64             `json:"-"`
-	Syslog                bool              `json:"-"`
-	RemoteSyslog          string            `json:"-"`
-	Routes                []*url.URL        `json:"-"`
-	RoutesStr             string            `json:"-"`
-	TLSTimeout            float64           `json:"tls_timeout"`
-	TLS                   bool              `json:"-"`
-	TLSVerify             bool              `json:"-"`
-	TLSMap                bool              `json:"-"`
-	TLSCert               string            `json:"-"`
-	TLSKey                string            `json:"-"`
-	TLSCaCert             string            `json:"-"`
-	TLSConfig             *tls.Config       `json:"-"`
-	TLSPinnedCerts        PinnedCertSet     `json:"-"`
-	TLSRateLimit          int64             `json:"-"`
-	// When set to true, the server will perform the TLS handshake before
-	// sending the INFO protocol. For clients that are not configured
-	// with a similar option, their connection will fail with some sort
-	// of timeout or EOF error since they are expecting to receive an
-	// INFO protocol first.
-	TLSHandshakeFirst bool `json:"-"`
+	LeafNode                   LeafNodeOpts      `json:"leaf,omitempty"`
+	Cluster                    ClusterOpts       `json:"cluster,omitempty"`
+	Websocket                  WebsocketOpts     `json:"-"`
+	Gateway                    GatewayOpts       `json:"gateway,omitempty"`
+	AccountResolver            AccountResolver   `json:"-"`
+	CustomClientAuthentication Authentication    `json:"-"`
+	CustomRouterAuthentication Authentication    `json:"-"`
+	AuthCallout                *AuthCallout      `json:"-"`
+	JsAccDefaultDomain         map[string]string `json:"-"` // account to domain name mapping
+	TLSConfig                  *tls.Config       `json:"-"`
+	TLSPinnedCerts             PinnedCertSet     `json:"-"`
+	AccountResolverTLSConfig   *tls.Config       `json:"-"`
+	// OCSPConfig enables OCSP Stapling in the server.
+	OCSPConfig    *OCSPConfig
+	tlsConfigOpts *TLSConfigOpts
+	// private fields, used to know if bool options are explicitly
+	// defined in config and/or command line params.
+	inConfig               map[string]bool
+	inCmdLine              map[string]bool
+	resolverPreloads       map[string]string
+	resolverPinnedAccounts map[string]struct{}
+	// OCSP Cache config enables next-gen cache for OCSP features
+	OCSPCacheConfig    *OCSPResponseCacheConfig
+	MQTT               MQTTOpts `json:"-"`
+	ConfigFile         string   `json:"-"`
+	ServerName         string   `json:"server_name"`
+	Host               string   `json:"addr"`
+	ClientAdvertise    string   `json:"-"`
+	NoAuthUser         string   `json:"-"`
+	SystemAccount      string   `json:"-"`
+	Username           string   `json:"-"`
+	Password           string   `json:"-"`
+	Authorization      string   `json:"-"`
+	HTTPHost           string   `json:"http_host"`
+	HTTPBasePath       string   `json:"http_base_path"`
+	JetStreamDomain    string   `json:"-"`
+	JetStreamExtHint   string   `json:"-"`
+	JetStreamKey       string   `json:"-"`
+	JetStreamOldKey    string   `json:"-"`
+	JetStreamUniqueTag string
+	StoreDir           string `json:"-"`
+	PidFile            string `json:"-"`
+	PortsFileDir       string `json:"-"`
+	LogFile            string `json:"-"`
+	RemoteSyslog       string `json:"-"`
+	RoutesStr          string `json:"-"`
+	TLSCert            string `json:"-"`
+	TLSKey             string `json:"-"`
+	TLSCaCert          string `json:"-"`
+	JetStreamTpm       JSTpmOpts
+	Nkeys              []*NkeyUser `json:"-"`
+	Users              []*User     `json:"-"`
+	Accounts           []*Account  `json:"-"`
+	Routes             []*url.URL  `json:"-"`
+	// Operating a trusted NATS server
+	TrustedKeys      []string              `json:"-"`
+	TrustedOperators []*jwt.OperatorClaims `json:"-"`
+	// Tags describing the server. They will be included in varz
+	// and used as a filter criteria for some system requests.
+	Tags jwt.TagList `json:"-"`
+	// private fields for operator mode
+	operatorJWT         []string
+	JetStreamLimits     JSLimitOpts
+	Port                int           `json:"port"`
+	MaxConn             int           `json:"max_connections"`
+	MaxSubs             int           `json:"max_subscriptions,omitempty"`
+	PingInterval        time.Duration `json:"ping_interval"`
+	MaxPingsOut         int           `json:"ping_max"`
+	HTTPPort            int           `json:"http_port"`
+	HTTPSPort           int           `json:"https_port"`
+	AuthTimeout         float64       `json:"auth_timeout"`
+	MaxPending          int64         `json:"max_pending"`
+	JetStreamMaxMemory  int64         `json:"-"`
+	JetStreamMaxStore   int64         `json:"-"`
+	JetStreamCipher     StoreCipher   `json:"-"`
+	JetStreamMaxCatchup int64
+	SyncInterval        time.Duration `json:"-"`
+	ProfPort            int           `json:"-"`
+	ProfBlockRate       int           `json:"-"`
+	LogSizeLimit        int64         `json:"-"`
+	LogMaxFiles         int64         `json:"-"`
+	TLSTimeout          float64       `json:"tls_timeout"`
+	TLSRateLimit        int64         `json:"-"`
 	// If TLSHandshakeFirst is true and this value is strictly positive,
 	// the server will wait for that amount of time for the TLS handshake
 	// to start before falling back to previous behavior of sending the
 	// INFO protocol first. It allows for a mix of newer clients that can
 	// require a TLS handshake first, and older clients that can't.
 	TLSHandshakeFirstFallback time.Duration `json:"-"`
-	AllowNonTLS               bool          `json:"-"`
 	WriteDeadline             time.Duration `json:"-"`
 	MaxClosedClients          int           `json:"-"`
 	LameDuckDuration          time.Duration `json:"-"`
 	LameDuckGracePeriod       time.Duration `json:"-"`
-
 	// MaxTracedMsgLen is the maximum printable length for traced messages.
 	MaxTracedMsgLen int `json:"-"`
-
-	// Operating a trusted NATS server
-	TrustedKeys              []string              `json:"-"`
-	TrustedOperators         []*jwt.OperatorClaims `json:"-"`
-	AccountResolver          AccountResolver       `json:"-"`
-	AccountResolverTLSConfig *tls.Config           `json:"-"`
-
-	// AlwaysEnableNonce will always present a nonce to new connections
-	// typically used by custom Authentication implementations who embeds
-	// the server and so not presented as a configuration option
-	AlwaysEnableNonce bool
-
-	CustomClientAuthentication Authentication `json:"-"`
-	CustomRouterAuthentication Authentication `json:"-"`
-
-	// CheckConfig configuration file syntax test was successful and exit.
-	CheckConfig bool `json:"-"`
-
-	// DisableJetStreamBanner will not print the ascii art on startup for JetStream enabled servers
-	DisableJetStreamBanner bool `json:"-"`
-
 	// ConnectErrorReports specifies the number of failed attempts
 	// at which point server should report the failure of an initial
 	// connection to a route, gateway or leaf node.
 	// See DEFAULT_CONNECT_ERROR_REPORTS for default value.
 	ConnectErrorReports int
-
 	// ReconnectErrorReports is similar to ConnectErrorReports except
 	// that this applies to reconnect events.
 	ReconnectErrorReports int
-
-	// Tags describing the server. They will be included in varz
-	// and used as a filter criteria for some system requests.
-	Tags jwt.TagList `json:"-"`
-
-	// OCSPConfig enables OCSP Stapling in the server.
-	OCSPConfig    *OCSPConfig
-	tlsConfigOpts *TLSConfigOpts
-
-	// private fields, used to know if bool options are explicitly
-	// defined in config and/or command line params.
-	inConfig  map[string]bool
-	inCmdLine map[string]bool
-
-	// private fields for operator mode
-	operatorJWT            []string
-	resolverPreloads       map[string]string
-	resolverPinnedAccounts map[string]struct{}
-
 	// private fields, used for testing
-	gatewaysSolicitDelay time.Duration
-	overrideProto        int
-
+	gatewaysSolicitDelay  time.Duration
+	overrideProto         int
+	MaxControlLine        int32 `json:"max_control_line"`
+	MaxPayload            int32 `json:"max_payload"`
+	DontListen            bool  `json:"dont_listen"`
+	Trace                 bool  `json:"-"`
+	Debug                 bool  `json:"-"`
+	TraceVerbose          bool  `json:"-"`
+	NoLog                 bool  `json:"-"`
+	NoSigs                bool  `json:"-"`
+	NoSublistCache        bool  `json:"-"`
+	NoHeaderSupport       bool  `json:"-"`
+	DisableShortFirstPing bool  `json:"-"`
+	Logtime               bool  `json:"-"`
+	LogtimeUTC            bool  `json:"-"`
+	MaxSubTokens          uint8 `json:"-"`
+	NoSystemAccount       bool  `json:"-"`
+	JetStream             bool  `json:"jetstream"`
+	SyncAlways            bool  `json:"-"`
+	Syslog                bool  `json:"-"`
+	TLS                   bool  `json:"-"`
+	TLSVerify             bool  `json:"-"`
+	TLSMap                bool  `json:"-"`
+	// When set to true, the server will perform the TLS handshake before
+	// sending the INFO protocol. For clients that are not configured
+	// with a similar option, their connection will fail with some sort
+	// of timeout or EOF error since they are expecting to receive an
+	// INFO protocol first.
+	TLSHandshakeFirst bool `json:"-"`
+	AllowNonTLS       bool `json:"-"`
+	// AlwaysEnableNonce will always present a nonce to new connections
+	// typically used by custom Authentication implementations who embeds
+	// the server and so not presented as a configuration option
+	AlwaysEnableNonce bool
+	// CheckConfig configuration file syntax test was successful and exit.
+	CheckConfig bool `json:"-"`
+	// DisableJetStreamBanner will not print the ascii art on startup for JetStream enabled servers
+	DisableJetStreamBanner bool `json:"-"`
 	// JetStream
 	maxMemSet   bool
 	maxStoreSet bool
 	syncSet     bool
-
-	// OCSP Cache config enables next-gen cache for OCSP features
-	OCSPCacheConfig *OCSPResponseCacheConfig
-
 	// Used to mark that we had a top level authorization block.
 	authBlockDefined bool
 }
 
 // WebsocketOpts are options for websocket
 type WebsocketOpts struct {
+	// TLS configuration is required.
+	TLSConfig *tls.Config
+	// When present, accepted client certificates (verify/verify_and_map) must be in this list
+	TLSPinnedCerts PinnedCertSet
+	// Headers to be added to the upgrade response.
+	// Useful for adding custom headers like Strict-Transport-Security.
+	Headers map[string]string
+	// Snapshot of configured TLS options.
+	tlsConfigOpts *TLSConfigOpts
 	// The server will accept websocket client connections on this hostname/IP.
 	Host string
-	// The server will accept websocket client connections on this port.
-	Port int
 	// The host:port to advertise to websocket clients in the cluster.
 	Advertise string
-
 	// If no user name is provided when a client connects, will default to the
 	// matching user from the global list of users in `Options.Users`.
 	NoAuthUser string
-
 	// Name of the cookie, which if present in WebSocket upgrade headers,
 	// will be treated as JWT during CONNECT phase as long as
 	// "jwt" specified in the CONNECT options is missing or empty.
 	JWTCookie string
-
 	// Name of the cookie, which if present in WebSocket upgrade headers,
 	// will be treated as Username during CONNECT phase as long as
 	// "user" specified in the CONNECT options is missing or empty.
 	UsernameCookie string
-
 	// Name of the cookie, which if present in WebSocket upgrade headers,
 	// will be treated as Password during CONNECT phase as long as
 	// "pass" specified in the CONNECT options is missing or empty.
 	PasswordCookie string
-
 	// Name of the cookie, which if present in WebSocket upgrade headers,
 	// will be treated as Token during CONNECT phase as long as
 	// "auth_token" specified in the CONNECT options is missing or empty.
@@ -469,16 +438,22 @@ type WebsocketOpts struct {
 	// other JWT or string. Note that this does map to an actual server-wide
 	// "auth_token", note that using it for that purpose is greatly discouraged.
 	TokenCookie string
-
 	// Authentication section. If anything is configured in this section,
 	// it will override the authorization configuration of regular clients.
 	Username string
 	Password string
 	Token    string
-
+	// Only origins in this list will be accepted. If empty and
+	// SameOrigin is false, any origin is accepted.
+	AllowedOrigins []string
+	// The server will accept websocket client connections on this port.
+	Port int
 	// Timeout for the authentication process.
 	AuthTimeout float64
-
+	// Total time allowed for the server to read the client request
+	// and write the response back to the client. This include the
+	// time needed for the TLS Handshake.
+	HandshakeTimeout time.Duration
 	// By default the server will enforce the use of TLS. If no TLS configuration
 	// is provided, you need to explicitly set NoTLS to true to allow the server
 	// to start without TLS configuration. Note that if a TLS configuration is
@@ -487,68 +462,45 @@ type WebsocketOpts struct {
 	// Running without TLS is less secure since Websocket clients that use bearer
 	// tokens will send them in clear. So this should not be used in production.
 	NoTLS bool
-
-	// TLS configuration is required.
-	TLSConfig *tls.Config
 	// If true, map certificate values for authentication purposes.
 	TLSMap bool
-
-	// When present, accepted client certificates (verify/verify_and_map) must be in this list
-	TLSPinnedCerts PinnedCertSet
-
 	// If true, the Origin header must match the request's host.
 	SameOrigin bool
-
-	// Only origins in this list will be accepted. If empty and
-	// SameOrigin is false, any origin is accepted.
-	AllowedOrigins []string
-
 	// If set to true, the server will negotiate with clients
 	// if compression can be used. If this is false, no compression
 	// will be used (both in server and clients) since it has to
 	// be negotiated between both endpoints
 	Compression bool
-
-	// Total time allowed for the server to read the client request
-	// and write the response back to the client. This include the
-	// time needed for the TLS Handshake.
-	HandshakeTimeout time.Duration
-
-	// Headers to be added to the upgrade response.
-	// Useful for adding custom headers like Strict-Transport-Security.
-	Headers map[string]string
-
-	// Snapshot of configured TLS options.
-	tlsConfigOpts *TLSConfigOpts
 }
 
 // MQTTOpts are options for MQTT
 type MQTTOpts struct {
+	// TLS configuration is required.
+	TLSConfig *tls.Config
+	// Set of allowable certificates
+	TLSPinnedCerts PinnedCertSet
+	// Snapshot of configured TLS options.
+	tlsConfigOpts *TLSConfigOpts
 	// The server will accept MQTT client connections on this hostname/IP.
 	Host string
-	// The server will accept MQTT client connections on this port.
-	Port int
-
 	// If no user name is provided when a client connects, will default to the
 	// matching user from the global list of users in `Options.Users`.
 	NoAuthUser string
-
 	// Authentication section. If anything is configured in this section,
 	// it will override the authorization configuration of regular clients.
 	Username string
 	Password string
 	Token    string
-
 	// JetStream domain mqtt is supposed to pick up
 	JsDomain string
-
+	// The server will accept MQTT client connections on this port.
+	Port int
 	// Number of replicas for MQTT streams.
 	// Negative or 0 value means that the server(s) will pick a replica
 	// number based on the known size of the cluster (but capped at 3).
 	// Note that if an account was already connected, the stream's replica
 	// count is not modified. Use the NATS CLI to update the count if desired.
 	StreamReplicas int
-
 	// Number of replicas for MQTT consumers.
 	// Negative or 0 value means that there is no override and the consumer
 	// will have the same replica factor that the stream it belongs to.
@@ -560,27 +512,13 @@ type MQTTOpts struct {
 	// UPDATE: This is no longer used while messages stream has interest policy retention
 	// which requires consumer replica count to match the parent stream.
 	ConsumerReplicas int
-
-	// Indicate if the consumers should be created with memory storage.
-	// Note that existing consumers are not modified.
-	ConsumerMemoryStorage bool
-
 	// If specified will have the system auto-cleanup the consumers after being
 	// inactive for the specified amount of time.
 	ConsumerInactiveThreshold time.Duration
-
 	// Timeout for the authentication process.
 	AuthTimeout float64
-
-	// TLS configuration is required.
-	TLSConfig *tls.Config
-	// If true, map certificate values for authentication purposes.
-	TLSMap bool
 	// Timeout for the TLS handshake
 	TLSTimeout float64
-	// Set of allowable certificates
-	TLSPinnedCerts PinnedCertSet
-
 	// AckWait is the amount of time after which a QoS 1 or 2 message sent to a
 	// client is redelivered as a DUPLICATE if the server has not received the
 	// PUBACK on the original Packet Identifier. The same value applies to
@@ -589,7 +527,6 @@ type MQTTOpts struct {
 	// option is applied only to new MQTT subscriptions (or sessions for
 	// PubRels).
 	AckWait time.Duration
-
 	// MaxAckPending is the amount of QoS 1 and 2 messages (combined) the server
 	// can send to a subscription without receiving any PUBACK for those
 	// messages. The valid range is [0..65535].
@@ -603,19 +540,18 @@ type MQTTOpts struct {
 	// subscription ending with "#" will use 2 times the MaxAckPending value.
 	// Note that changes to this option is applied only to new subscriptions.
 	MaxAckPending uint16
-
-	// Snapshot of configured TLS options.
-	tlsConfigOpts *TLSConfigOpts
-
+	// Indicate if the consumers should be created with memory storage.
+	// Note that existing consumers are not modified.
+	ConsumerMemoryStorage bool
+	// If true, map certificate values for authentication purposes.
+	TLSMap bool
 	// rejectQoS2Pub tells the MQTT client to not accept QoS2 PUBLISH, instead
 	// error and terminate the connection.
 	rejectQoS2Pub bool
-
 	// downgradeQOS2Sub tells the MQTT client to downgrade QoS2 SUBSCRIBE
 	// requests to QoS1.
 	downgradeQoS2Sub bool
 }
-
 type netResolver interface {
 	LookupHost(ctx context.Context, host string) ([]string, error)
 }
@@ -640,7 +576,6 @@ func (o *Options) Clone() *Options {
 			clone.Nkeys[i] = nkey.clone()
 		}
 	}
-
 	if o.Routes != nil {
 		clone.Routes = deepCopyURLs(o.Routes)
 	}
@@ -662,7 +597,6 @@ func (o *Options) Clone() *Options {
 	// FIXME(dlc) - clone leaf node stuff.
 	return clone
 }
-
 func deepCopyURLs(urls []*url.URL) []*url.URL {
 	if urls == nil {
 		return nil
@@ -678,6 +612,9 @@ func deepCopyURLs(urls []*url.URL) []*url.URL {
 
 // Configuration file authorization section.
 type authorization struct {
+	defaultPermissions *Permissions
+	// Auth Callouts
+	callout *AuthCallout
 	// Singles
 	user  string
 	pass  string
@@ -685,37 +622,34 @@ type authorization struct {
 	nkey  string
 	acc   string
 	// Multiple Nkeys/Users
-	nkeys              []*NkeyUser
-	users              []*User
-	timeout            float64
-	defaultPermissions *Permissions
-	// Auth Callouts
-	callout *AuthCallout
+	nkeys   []*NkeyUser
+	users   []*User
+	timeout float64
 }
 
 // TLSConfigOpts holds the parsed tls config information,
 // used with flag parsing
 type TLSConfigOpts struct {
+	PinnedCerts       PinnedCertSet
+	OCSPPeerConfig    *certidp.OCSPPeerConfig
 	CertFile          string
 	KeyFile           string
 	CaFile            string
+	CertMatch         string
+	Ciphers           []uint16
+	CurvePreferences  []tls.CurveID
+	CaCertsMatch      []string
+	Certificates      []*TLSCertPairOpt
+	FallbackDelay     time.Duration // Where supported, indicates how long to wait for the handshake before falling back to sending the INFO protocol first.
+	Timeout           float64
+	RateLimit         int64
+	CertStore         certstore.StoreType
+	CertMatchBy       certstore.MatchByType
 	Verify            bool
 	Insecure          bool
 	Map               bool
 	TLSCheckKnownURLs bool
-	HandshakeFirst    bool          // Indicate that the TLS handshake should occur first, before sending the INFO protocol.
-	FallbackDelay     time.Duration // Where supported, indicates how long to wait for the handshake before falling back to sending the INFO protocol first.
-	Timeout           float64
-	RateLimit         int64
-	Ciphers           []uint16
-	CurvePreferences  []tls.CurveID
-	PinnedCerts       PinnedCertSet
-	CertStore         certstore.StoreType
-	CertMatchBy       certstore.MatchByType
-	CertMatch         string
-	CaCertsMatch      []string
-	OCSPPeerConfig    *certidp.OCSPPeerConfig
-	Certificates      []*TLSCertPairOpt
+	HandshakeFirst    bool // Indicate that the TLS handshake should occur first, before sending the INFO protocol.
 }
 
 // TLSCertPairOpt are the paths to a certificate and private key.
@@ -726,11 +660,10 @@ type TLSCertPairOpt struct {
 
 // OCSPConfig represents the options of OCSP stapling options.
 type OCSPConfig struct {
-	// Mode defines the policy for OCSP stapling.
-	Mode OCSPMode
-
 	// OverrideURLs is the http URL endpoint used to get OCSP staples.
 	OverrideURLs []string
+	// Mode defines the policy for OCSP stapling.
+	Mode OCSPMode
 }
 
 var tlsUsage = `
@@ -768,7 +701,6 @@ func ProcessConfigFile(configFile string) (*Options, error) {
 		if cerr, ok := err.(*processConfigErr); ok && len(cerr.Errors()) == 0 {
 			return opts, nil
 		}
-
 		return nil, err
 	}
 	return opts, nil
@@ -841,13 +773,11 @@ func configureSystemAccount(o *Options, m map[string]any) (retErr error) {
 		o.SystemAccount = sa
 		return nil
 	}
-
 	if v, ok := m["system_account"]; ok {
 		return configure(v)
 	} else if v, ok := m["system"]; ok {
 		return configure(v)
 	}
-
 	return nil
 }
 
@@ -880,24 +810,20 @@ func (o *Options) ProcessConfigFile(configFile string) error {
 	if len(m) == 0 {
 		warnings = append(warnings, fmt.Errorf("%s: config has no values or is empty", configFile))
 	}
-
 	// First check whether a system account has been defined,
 	// as that is a condition for other features to be enabled.
 	if err := configureSystemAccount(o, m); err != nil {
 		errors = append(errors, err)
 	}
-
 	for k, v := range m {
 		o.processConfigFileLine(k, v, &errors, &warnings)
 	}
-
 	// Post-process: check auth callout allowed accounts against configured accounts.
 	if o.AuthCallout != nil {
 		accounts := make(map[string]struct{})
 		for _, acc := range o.Accounts {
 			accounts[acc.Name] = struct{}{}
 		}
-
 		for _, acc := range o.AuthCallout.AllowedAccounts {
 			if _, ok := accounts[acc]; !ok {
 				err := &configErr{nil, fmt.Sprintf("auth_callout allowed account %q not found in configured accounts", acc)}
@@ -905,21 +831,17 @@ func (o *Options) ProcessConfigFile(configFile string) error {
 			}
 		}
 	}
-
 	if len(errors) > 0 || len(warnings) > 0 {
 		return &processConfigErr{
 			errors:   errors,
 			warnings: warnings,
 		}
 	}
-
 	return nil
 }
-
 func (o *Options) processConfigFileLine(k string, v any, errors *[]error, warnings *[]error) {
 	var lt token
 	defer convertPanicToErrorList(&lt, errors)
-
 	tk, v := unwrapValue(v, &lt)
 	switch strings.ToLower(k) {
 	case "listen":
@@ -989,7 +911,6 @@ func (o *Options) processConfigFileLine(k string, v any, errors *[]error, warnin
 		o.Authorization = auth.token
 		o.AuthTimeout = auth.timeout
 		o.AuthCallout = auth.callout
-
 		if (auth.user != _EMPTY_ || auth.pass != _EMPTY_) && auth.token != _EMPTY_ {
 			err := &configErr{tk, "Cannot have a user/pass and token"}
 			*errors = append(*errors, err)
@@ -1169,7 +1090,6 @@ func (o *Options) processConfigFileLine(k string, v any, errors *[]error, warnin
 		o.TLSRateLimit = tc.RateLimit
 		o.TLSHandshakeFirst = tc.HandshakeFirst
 		o.TLSHandshakeFirstFallback = tc.FallbackDelay
-
 		// Need to keep track of path of the original TLS config
 		// and certs path for OCSP Stapling monitoring.
 		o.tlsConfigOpts = tc
@@ -1186,7 +1106,6 @@ func (o *Options) processConfigFileLine(k string, v any, errors *[]error, warnin
 			}
 		case map[string]any:
 			ocsp := &OCSPConfig{Mode: OCSPModeAuto}
-
 			for kk, kv := range vv {
 				_, v = unwrapValue(kv, &tk)
 				switch kk {
@@ -1362,7 +1281,6 @@ func (o *Options) processConfigFileLine(k string, v any, errors *[]error, warnin
 				*errors = append(*errors, &configErr{tk, err.Error()})
 				return
 			}
-
 			checkDir := func() {
 				if dir == _EMPTY_ {
 					*errors = append(*errors, &configErr{tk, "dir has no value and needs to point to a directory"})
@@ -1373,7 +1291,6 @@ func (o *Options) processConfigFileLine(k string, v any, errors *[]error, warnin
 					return
 				}
 			}
-
 			var res AccountResolver
 			switch strings.ToUpper(dirType) {
 			case "CACHE":
@@ -1624,7 +1541,6 @@ func (o *Options) processConfigFileLine(k string, v any, errors *[]error, warnin
 		}
 	}
 }
-
 func setupUsersAndNKeysDuplicateCheckMap(o *Options) map[string]struct{} {
 	unames := make(map[string]struct{}, len(o.Users)+len(o.Nkeys))
 	for _, u := range o.Users {
@@ -1635,7 +1551,6 @@ func setupUsersAndNKeysDuplicateCheckMap(o *Options) map[string]struct{} {
 	}
 	return unames
 }
-
 func parseDuration(field string, tk token, v any, errors *[]error, warnings *[]error) time.Duration {
 	if wd, ok := v.(string); ok {
 		if dur, err := time.ParseDuration(wd); err != nil {
@@ -1659,7 +1574,6 @@ func parseDuration(field string, tk token, v any, errors *[]error, warnings *[]e
 		return time.Duration(v.(int64)) * time.Second
 	}
 }
-
 func trackExplicitVal(pm *map[string]bool, name string, val bool) {
 	m := *pm
 	if m == nil {
@@ -1702,13 +1616,11 @@ func parseListen(v any) (*hostPort, error) {
 func parseCluster(v any, opts *Options, errors *[]error, warnings *[]error) error {
 	var lt token
 	defer convertPanicToErrorList(&lt, errors)
-
 	tk, v := unwrapValue(v, &lt)
 	cm, ok := v.(map[string]any)
 	if !ok {
 		return &configErr{tk, fmt.Sprintf("Expected map to define cluster, got %T", v)}
 	}
-
 	for mk, mv := range cm {
 		// Again, unwrap token value if line check is required.
 		tk, mv = unwrapValue(mv, &lt)
@@ -1755,11 +1667,9 @@ func parseCluster(v any, opts *Options, errors *[]error, warnings *[]error) erro
 				*errors = append(*errors, err)
 				continue
 			}
-
 			opts.Cluster.Username = auth.user
 			opts.Cluster.Password = auth.pass
 			opts.Cluster.AuthTimeout = auth.timeout
-
 			if auth.defaultPermissions != nil {
 				err := &configWarningErr{
 					field: mk,
@@ -1769,7 +1679,6 @@ func parseCluster(v any, opts *Options, errors *[]error, warnings *[]error) erro
 					},
 				}
 				*warnings = append(*warnings, err)
-
 				// Do not set permissions if they were specified in top-level cluster block.
 				if opts.Cluster.Permissions == nil {
 					setClusterPermissions(&opts.Cluster, auth.defaultPermissions)
@@ -1854,7 +1763,6 @@ func parseCluster(v any, opts *Options, errors *[]error, warnings *[]error) erro
 func parseCompression(c *CompressionOpts, chosenModeForOn string, tk token, mk string, mv any) (retErr error) {
 	var lt token
 	defer convertPanicToError(&lt, &retErr)
-
 	switch mv := mv.(type) {
 	case string:
 		// Do not validate here, it will be done in NewServer.
@@ -1891,14 +1799,11 @@ func parseCompression(c *CompressionOpts, chosenModeForOn string, tk token, mk s
 	}
 	return nil
 }
-
 func parseURLs(a []any, typ string, warnings *[]error) (urls []*url.URL, errors []error) {
 	urls = make([]*url.URL, 0, len(a))
 	var lt token
 	defer convertPanicToErrorList(&lt, &errors)
-
 	dd := make(map[string]bool)
-
 	for _, u := range a {
 		tk, u := unwrapValue(u, &lt)
 		sURL := u.(string)
@@ -1924,7 +1829,6 @@ func parseURLs(a []any, typ string, warnings *[]error) (urls []*url.URL, errors 
 	}
 	return urls, errors
 }
-
 func parseURL(u string, typ string) (*url.URL, error) {
 	urlStr := strings.TrimSpace(u)
 	url, err := url.Parse(urlStr)
@@ -1935,11 +1839,9 @@ func parseURL(u string, typ string) (*url.URL, error) {
 	}
 	return url, nil
 }
-
 func parseGateway(v any, o *Options, errors *[]error, warnings *[]error) error {
 	var lt token
 	defer convertPanicToErrorList(&lt, errors)
-
 	tk, v := unwrapValue(v, &lt)
 	gm, ok := v.(map[string]any)
 	if !ok {
@@ -1990,7 +1892,6 @@ func parseGateway(v any, o *Options, errors *[]error, warnings *[]error) error {
 				*errors = append(*errors, err)
 				continue
 			}
-
 			o.Gateway.Username = auth.user
 			o.Gateway.Password = auth.pass
 			o.Gateway.AuthTimeout = auth.timeout
@@ -2041,9 +1942,7 @@ var defaultJSAccountTiers = map[string]JetStreamAccountLimits{_EMPTY_: dynamicJS
 // use dynamic account limits.
 func parseJetStreamForAccount(v any, acc *Account, errors *[]error) error {
 	var lt token
-
 	tk, v := unwrapValue(v, &lt)
-
 	// Value here can be bool, or string "enabled" or a map.
 	switch vv := v.(type) {
 	case bool:
@@ -2138,31 +2037,25 @@ func getStorageSize(v any) (int64, error) {
 	if ok {
 		return v.(int64), nil
 	}
-
 	s, ok := v.(string)
 	if !ok {
 		return 0, fmt.Errorf("must be int64 or string")
 	}
-
 	if s == _EMPTY_ {
 		return 0, nil
 	}
-
 	suffix := s[len(s)-1:]
 	prefix := s[:len(s)-1]
 	num, err := strconv.ParseInt(prefix, 10, 64)
 	if err != nil {
 		return 0, err
 	}
-
 	suffixMap := map[string]int64{"K": 10, "M": 20, "G": 30, "T": 40}
-
 	mult, ok := suffixMap[suffix]
 	if !ok {
 		return 0, fmt.Errorf("sizes defined as strings must end in K, M, G, T")
 	}
 	num *= 1 << mult
-
 	return num, nil
 }
 
@@ -2170,9 +2063,7 @@ func getStorageSize(v any) (int64, error) {
 func parseJetStreamLimits(v any, opts *Options, errors *[]error) error {
 	var lt token
 	tk, v := unwrapValue(v, &lt)
-
 	lim := JSLimitOpts{}
-
 	vv, ok := v.(map[string]any)
 	if !ok {
 		return &configErr{tk, fmt.Sprintf("Expected a map to define JetStreamLimits, got %T", v)}
@@ -2213,9 +2104,7 @@ func parseJetStreamLimits(v any, opts *Options, errors *[]error) error {
 func parseJetStreamTPM(v interface{}, opts *Options, errors *[]error) error {
 	var lt token
 	tk, v := unwrapValue(v, &lt)
-
 	tpm := JSTpmOpts{}
-
 	vv, ok := v.(map[string]interface{})
 	if !ok {
 		return &configErr{tk, fmt.Sprintf("Expected a map to define JetStreamLimits, got %T", v)}
@@ -2251,7 +2140,6 @@ func parseJetStreamTPM(v interface{}, opts *Options, errors *[]error) error {
 	opts.JetStreamTpm = tpm
 	return nil
 }
-
 func setJetStreamEkCipher(opts *Options, mv interface{}, tk token) error {
 	switch strings.ToLower(mv.(string)) {
 	case "chacha", "chachapoly":
@@ -2267,9 +2155,7 @@ func setJetStreamEkCipher(opts *Options, mv interface{}, tk token) error {
 // Parse enablement of jetstream for a server.
 func parseJetStream(v any, opts *Options, errors *[]error, warnings *[]error) error {
 	var lt token
-
 	tk, v := unwrapValue(v, &lt)
-
 	// Value here can be bool, or string "enabled" or a map.
 	switch vv := v.(type) {
 	case bool:
@@ -2363,7 +2249,6 @@ func parseJetStream(v any, opts *Options, errors *[]error, warnings *[]error) er
 	default:
 		return &configErr{tk, fmt.Sprintf("Expected map, bool or string to define JetStream, got %T", v)}
 	}
-
 	return nil
 }
 
@@ -2371,13 +2256,11 @@ func parseJetStream(v any, opts *Options, errors *[]error, warnings *[]error) er
 func parseLeafNodes(v any, opts *Options, errors *[]error, warnings *[]error) error {
 	var lt token
 	defer convertPanicToErrorList(&lt, errors)
-
 	tk, v := unwrapValue(v, &lt)
 	cm, ok := v.(map[string]any)
 	if !ok {
 		return &configErr{tk, fmt.Sprintf("Expected map to define a leafnode, got %T", v)}
 	}
-
 	for mk, mv := range cm {
 		// Again, unwrap token value if line check is required.
 		tk, mv = unwrapValue(mv, &lt)
@@ -2482,7 +2365,6 @@ func parseLeafAuthorization(v any, errors *[]error) (*authorization, error) {
 		auth = &authorization{}
 	)
 	defer convertPanicToErrorList(&lt, errors)
-
 	_, v = unwrapValue(v, &lt)
 	am = v.(map[string]any)
 	for mk, mv := range am {
@@ -2542,7 +2424,6 @@ func parseLeafUsers(mv any, errors *[]error) ([]*User, error) {
 		users = []*User{}
 	)
 	defer convertPanicToErrorList(&lt, errors)
-
 	tk, mv = unwrapValue(mv, &lt)
 	// Make sure we have an array
 	uv, ok := mv.([]any)
@@ -2591,7 +2472,6 @@ func parseLeafUsers(mv any, errors *[]error) ([]*User, error) {
 	}
 	return users, nil
 }
-
 func parseRemoteLeafNodes(v any, errors *[]error, warnings *[]error) ([]*RemoteLeafOpts, error) {
 	var lt token
 	defer convertPanicToErrorList(&lt, errors)
@@ -2748,11 +2628,9 @@ func getTLSConfig(tk token) (*tls.Config, *TLSConfigOpts, error) {
 	config.RootCAs = config.ClientCAs
 	return config, tc, nil
 }
-
 func parseGateways(v any, errors *[]error, warnings *[]error) ([]*RemoteGatewayOpts, error) {
 	var lt token
 	defer convertPanicToErrorList(&lt, errors)
-
 	tk, v := unwrapValue(v, &lt)
 	// Make sure we have an array
 	ga, ok := v.([]any)
@@ -2833,15 +2711,14 @@ func setClusterPermissions(opts *ClusterOpts, perms *Permissions) {
 // to be processed after being parsed.
 type export struct {
 	acc  *Account
+	lat  *serviceLatency
 	sub  string
 	accs []string
-	rt   ServiceRespType
-	lat  *serviceLatency
 	rthr time.Duration
 	tPos uint
+	rt   ServiceRespType
 	atrc bool // allow_trace
 }
-
 type importStream struct {
 	acc  *Account
 	an   string
@@ -2850,7 +2727,6 @@ type importStream struct {
 	pre  string
 	atrc bool // allow_trace
 }
-
 type importService struct {
 	acc   *Account
 	an    string
@@ -2863,7 +2739,6 @@ type importService struct {
 func isReservedAccount(name string) bool {
 	return name == globalAccountName
 }
-
 func parseAccountMapDest(v any, tk token, errors *[]error) (*MapDest, *configErr) {
 	// These should be maps.
 	mv, ok := v.(map[string]any)
@@ -2872,11 +2747,9 @@ func parseAccountMapDest(v any, tk token, errors *[]error) (*MapDest, *configErr
 		*errors = append(*errors, err)
 		return nil, err
 	}
-
 	mdest := &MapDest{}
 	var lt token
 	var sw bool
-
 	for k, v := range mv {
 		tk, dmv := unwrapValue(v, &lt)
 		switch strings.ToLower(k) {
@@ -2922,13 +2795,11 @@ func parseAccountMapDest(v any, tk token, errors *[]error) (*MapDest, *configErr
 			return nil, err
 		}
 	}
-
 	if !sw {
 		err := &configErr{tk, fmt.Sprintf("Missing weight for mapping destination %q", mdest.Subject)}
 		*errors = append(*errors, err)
 		return nil, err
 	}
-
 	return mdest, nil
 }
 
@@ -2936,7 +2807,6 @@ func parseAccountMapDest(v any, tk token, errors *[]error) (*MapDest, *configErr
 func parseAccountMappings(v any, acc *Account, errors *[]error) error {
 	var lt token
 	defer convertPanicToErrorList(&lt, errors)
-
 	tk, v := unwrapValue(v, &lt)
 	am := v.(map[string]any)
 	for subj, mv := range am {
@@ -2946,7 +2816,6 @@ func parseAccountMappings(v any, acc *Account, errors *[]error) error {
 			continue
 		}
 		tk, v := unwrapValue(mv, &lt)
-
 		switch vv := v.(type) {
 		case string:
 			if err := acc.AddMapping(subj, v.(string)); err != nil {
@@ -2964,7 +2833,6 @@ func parseAccountMappings(v any, acc *Account, errors *[]error) error {
 				}
 				mappings = append(mappings, mdest)
 			}
-
 			// Now add them in..
 			if err := acc.AddWeightedMappings(subj, mappings...); err != nil {
 				err := &configErr{tk, fmt.Sprintf("Error adding mapping for %q : %v", subj, err)}
@@ -2989,7 +2857,6 @@ func parseAccountMappings(v any, acc *Account, errors *[]error) error {
 			continue
 		}
 	}
-
 	return nil
 }
 
@@ -2997,13 +2864,11 @@ func parseAccountMappings(v any, acc *Account, errors *[]error) error {
 func parseAccountLimits(mv any, acc *Account, errors *[]error) error {
 	var lt token
 	defer convertPanicToErrorList(&lt, errors)
-
 	tk, v := unwrapValue(mv, &lt)
 	am, ok := v.(map[string]any)
 	if !ok {
 		return &configErr{tk, fmt.Sprintf("Expected account limits to be a map/struct, got %+v", v)}
 	}
-
 	for k, v := range am {
 		tk, mv = unwrapValue(v, &lt)
 		switch strings.ToLower(k) {
@@ -3022,10 +2887,8 @@ func parseAccountLimits(mv any, acc *Account, errors *[]error) error {
 			}
 		}
 	}
-
 	return nil
 }
-
 func parseAccountMsgTrace(mv any, topKey string, acc *Account) error {
 	processDest := func(tk token, k string, v any) error {
 		td, ok := v.(string)
@@ -3045,7 +2908,6 @@ func parseAccountMsgTrace(mv any, topKey string, acc *Account) error {
 		acc.traceDestSampling = n
 		return nil
 	}
-
 	var lt token
 	tk, v := unwrapValue(mv, &lt)
 	switch vv := v.(type) {
@@ -3099,7 +2961,6 @@ func parseAccounts(v any, opts *Options, errors *[]error, warnings *[]error) err
 		lt             token
 	)
 	defer convertPanicToErrorList(&lt, errors)
-
 	tk, v := unwrapValue(v, &lt)
 	switch vv := v.(type) {
 	// Simple array of account names.
@@ -3129,15 +2990,12 @@ func parseAccounts(v any, opts *Options, errors *[]error, warnings *[]error) err
 		// We also want to check for users that may have been added in
 		// parseAuthorization{} if that happened first.
 		uorn := setupUsersAndNKeysDuplicateCheckMap(opts)
-
 		for aname, mv := range vv {
 			tk, amv := unwrapValue(mv, &lt)
-
 			// Skip referenced config vars within the account block.
 			if tk.IsUsedVariable() {
 				continue
 			}
-
 			// These should be maps.
 			mv, ok := amv.(map[string]any)
 			if !ok {
@@ -3157,7 +3015,6 @@ func parseAccounts(v any, opts *Options, errors *[]error, warnings *[]error) err
 			)
 			acc := NewAccount(aname)
 			opts.Accounts = append(opts.Accounts, acc)
-
 			for k, v := range mv {
 				tk, mv := unwrapValue(v, &lt)
 				switch strings.ToLower(k) {
@@ -3289,11 +3146,9 @@ func parseAccounts(v any, opts *Options, errors *[]error, warnings *[]error) err
 	if len(*errors) > 0 {
 		return nil
 	}
-
 	// Parse Imports and Exports here after all accounts defined.
 	// Do exports first since they need to be defined for imports to succeed
 	// since we do permissions checks.
-
 	// Create a lookup map for accounts lookups.
 	am := make(map[string]*Account, len(opts.Accounts))
 	for _, a := range opts.Accounts {
@@ -3335,7 +3190,6 @@ func parseAccounts(v any, opts *Options, errors *[]error, warnings *[]error) err
 			*errors = append(*errors, &configErr{tk, msg})
 			continue
 		}
-
 		if service.rthr != 0 {
 			// Response threshold was set in options.
 			if err := service.acc.SetServiceExportResponseThreshold(service.sub, service.rthr); err != nil {
@@ -3344,7 +3198,6 @@ func parseAccounts(v any, opts *Options, errors *[]error, warnings *[]error) err
 				continue
 			}
 		}
-
 		if service.lat != nil {
 			// System accounts are on be default so just make sure we have not opted out..
 			if opts.NoSystemAccount {
@@ -3352,14 +3205,12 @@ func parseAccounts(v any, opts *Options, errors *[]error, warnings *[]error) err
 				*errors = append(*errors, &configErr{tk, msg})
 				continue
 			}
-
 			if err := service.acc.TrackServiceExportWithSampling(service.sub, service.lat.subject, int(service.lat.sampling)); err != nil {
 				msg := fmt.Sprintf("Error adding service latency sampling for %q on subject %q: %v", service.sub, service.lat.subject, err)
 				*errors = append(*errors, &configErr{tk, msg})
 				continue
 			}
 		}
-
 		if service.atrc {
 			if err := service.acc.SetServiceExportAllowTrace(service.sub, true); err != nil {
 				msg := fmt.Sprintf("Error adding allow_trace for %q: %v", service.sub, err)
@@ -3410,7 +3261,6 @@ func parseAccounts(v any, opts *Options, errors *[]error, warnings *[]error) err
 			continue
 		}
 	}
-
 	return nil
 }
 
@@ -3418,17 +3268,14 @@ func parseAccounts(v any, opts *Options, errors *[]error, warnings *[]error) err
 func parseAccountExports(v any, acc *Account, errors *[]error) ([]*export, []*export, error) {
 	var lt token
 	defer convertPanicToErrorList(&lt, errors)
-
 	// This should be an array of objects/maps.
 	tk, v := unwrapValue(v, &lt)
 	ims, ok := v.([]any)
 	if !ok {
 		return nil, nil, &configErr{tk, fmt.Sprintf("Exports should be an array, got %T", v)}
 	}
-
 	var services []*export
 	var streams []*export
-
 	for _, v := range ims {
 		// Should have stream or service
 		stream, service, err := parseExportStreamOrService(v, errors)
@@ -3452,18 +3299,15 @@ func parseAccountExports(v any, acc *Account, errors *[]error) ([]*export, []*ex
 func parseAccountImports(v any, acc *Account, errors *[]error) ([]*importStream, []*importService, error) {
 	var lt token
 	defer convertPanicToErrorList(&lt, errors)
-
 	// This should be an array of objects/maps.
 	tk, v := unwrapValue(v, &lt)
 	ims, ok := v.([]any)
 	if !ok {
 		return nil, nil, &configErr{tk, fmt.Sprintf("Imports should be an array, got %T", v)}
 	}
-
 	var services []*importService
 	var streams []*importStream
 	svcSubjects := map[string]*importService{}
-
 	for _, v := range ims {
 		// Should have stream or service
 		stream, service, err := parseImportStreamOrService(v, errors)
@@ -3496,7 +3340,6 @@ func parseAccountImports(v any, acc *Account, errors *[]error) ([]*importStream,
 func parseAccount(v map[string]any, errors *[]error) (string, string, error) {
 	var lt token
 	defer convertPanicToErrorList(&lt, errors)
-
 	var accountName, subject string
 	for mk, mv := range v {
 		tk, mv := unwrapValue(mv, &lt)
@@ -3545,7 +3388,6 @@ func parseExportStreamOrService(v any, errors *[]error) (*export, *export, error
 		atrcToken  token
 	)
 	defer convertPanicToErrorList(&lt, errors)
-
 	tk, v := unwrapValue(v, &lt)
 	vv, ok := v.(map[string]any)
 	if !ok {
@@ -3738,24 +3580,20 @@ func parseExportStreamOrService(v any, errors *[]error) (*export, *export, error
 func parseServiceLatency(root token, v any) (l *serviceLatency, retErr error) {
 	var lt token
 	defer convertPanicToError(&lt, &retErr)
-
 	if subject, ok := v.(string); ok {
 		return &serviceLatency{
 			subject:  subject,
 			sampling: DEFAULT_SERVICE_LATENCY_SAMPLING,
 		}, nil
 	}
-
 	latency, ok := v.(map[string]any)
 	if !ok {
 		return nil, &configErr{token: root,
 			reason: fmt.Sprintf("Expected latency entry to be a map/struct or string, got %T", v)}
 	}
-
 	sl := serviceLatency{
 		sampling: DEFAULT_SERVICE_LATENCY_SAMPLING,
 	}
-
 	// Read sampling value.
 	if v, ok := latency["sampling"]; ok {
 		tk, v := unwrapValue(v, &lt)
@@ -3789,17 +3627,14 @@ func parseServiceLatency(root token, v any) (l *serviceLatency, retErr error) {
 					reason: ErrBadSampling.Error()}
 			}
 		}
-
 		sl.sampling = int8(sample)
 	}
-
 	// Read subject value.
 	v, ok = latency["subject"]
 	if !ok {
 		return nil, &configErr{token: root,
 			reason: "Latency subject required, but missing"}
 	}
-
 	tk, v := unwrapValue(v, &lt)
 	subject, ok := v.(string)
 	if !ok {
@@ -3807,7 +3642,6 @@ func parseServiceLatency(root token, v any) (l *serviceLatency, retErr error) {
 			reason: fmt.Sprintf("Expected latency subject to be a string, got %T", subject)}
 	}
 	sl.subject = subject
-
 	return &sl, nil
 }
 
@@ -3828,7 +3662,6 @@ func parseImportStreamOrService(v any, errors *[]error) (*importStream, *importS
 		atrcToken  token
 	)
 	defer convertPanicToErrorList(&lt, errors)
-
 	tk, mv := unwrapValue(v, &lt)
 	vv, ok := mv.(map[string]any)
 	if !ok {
@@ -3951,7 +3784,6 @@ func parseImportStreamOrService(v any, errors *[]error) (*importStream, *importS
 				*errors = append(*errors, err)
 			}
 		}
-
 	}
 	return curStream, curService, nil
 }
@@ -3982,7 +3814,6 @@ func parseAuthorization(v any, errors *[]error) (*authorization, error) {
 		auth = &authorization{}
 	)
 	defer convertPanicToErrorList(&lt, errors)
-
 	_, v = unwrapValue(v, &lt)
 	am = v.(map[string]any)
 	for mk, mv := range am {
@@ -4037,7 +3868,6 @@ func parseAuthorization(v any, errors *[]error) (*authorization, error) {
 			}
 			continue
 		}
-
 		applyDefaultPermissions(auth.users, auth.nkeys, auth.defaultPermissions)
 	}
 	return auth, nil
@@ -4053,7 +3883,6 @@ func parseUsers(mv any, errors *[]error) ([]*NkeyUser, []*User, error) {
 	)
 	defer convertPanicToErrorList(&lt, errors)
 	tk, mv = unwrapValue(mv, &lt)
-
 	// Make sure we have an array
 	uv, ok := mv.([]any)
 	if !ok {
@@ -4061,7 +3890,6 @@ func parseUsers(mv any, errors *[]error) ([]*NkeyUser, []*User, error) {
 	}
 	for _, u := range uv {
 		tk, u = unwrapValue(u, &lt)
-
 		// Check its a map/struct
 		um, ok := u.(map[string]any)
 		if !ok {
@@ -4069,7 +3897,6 @@ func parseUsers(mv any, errors *[]error) ([]*NkeyUser, []*User, error) {
 			*errors = append(*errors, err)
 			continue
 		}
-
 		var (
 			user  = &User{}
 			nkey  = &NkeyUser{}
@@ -4079,7 +3906,6 @@ func parseUsers(mv any, errors *[]error) ([]*NkeyUser, []*User, error) {
 		for k, v := range um {
 			// Also needs to unwrap first
 			tk, v = unwrapValue(v, &lt)
-
 			switch strings.ToLower(k) {
 			case "nkey":
 				nkey.Nkey = v.(string)
@@ -4119,7 +3945,6 @@ func parseUsers(mv any, errors *[]error) ([]*NkeyUser, []*User, error) {
 				user.Permissions = perms
 			}
 		}
-
 		// Check to make sure we have at least an nkey or username <password> defined.
 		if nkey.Nkey == _EMPTY_ && user.Username == _EMPTY_ {
 			return nil, nil, &configErr{tk, "User entry requires a user"}
@@ -4139,7 +3964,6 @@ func parseUsers(mv any, errors *[]error) ([]*NkeyUser, []*User, error) {
 	}
 	return keys, users, nil
 }
-
 func parseAllowedConnectionTypes(tk token, lt *token, mv any, errors *[]error) map[string]struct{} {
 	cts, err := parseStringArray("allowed connection types", tk, lt, mv, errors)
 	// If error, it has already been added to the `errors` array, simply return
@@ -4161,7 +3985,6 @@ func parseAuthCallout(mv any, errors *[]error) (*AuthCallout, error) {
 		ac = &AuthCallout{}
 	)
 	defer convertPanicToErrorList(&lt, errors)
-
 	tk, mv = unwrapValue(mv, &lt)
 	pm, ok := mv.(map[string]any)
 	if !ok {
@@ -4169,7 +3992,6 @@ func parseAuthCallout(mv any, errors *[]error) (*AuthCallout, error) {
 	}
 	for k, v := range pm {
 		tk, mv = unwrapValue(v, &lt)
-
 		switch strings.ToLower(k) {
 		case "issuer":
 			ac.Issuer = mv.(string)
@@ -4230,7 +4052,6 @@ func parseUserPermissions(mv any, errors *[]error) (*Permissions, error) {
 		p  = &Permissions{}
 	)
 	defer convertPanicToErrorList(&lt, errors)
-
 	tk, mv = unwrapValue(mv, &lt)
 	pm, ok := mv.(map[string]any)
 	if !ok {
@@ -4238,7 +4059,6 @@ func parseUserPermissions(mv any, errors *[]error) (*Permissions, error) {
 	}
 	for k, v := range pm {
 		tk, mv = unwrapValue(v, &lt)
-
 		switch strings.ToLower(k) {
 		// For routes:
 		// Import is Publish
@@ -4306,9 +4126,7 @@ func parseVariablePermissions(v any, errors *[]error) (*SubjectPermission, error
 func parsePermSubjects(v any, errors *[]error) ([]string, error) {
 	var lt token
 	defer convertPanicToErrorList(&lt, errors)
-
 	tk, v := unwrapValue(v, &lt)
-
 	var subjects []string
 	switch vv := v.(type) {
 	case string:
@@ -4318,7 +4136,6 @@ func parsePermSubjects(v any, errors *[]error) ([]string, error) {
 	case []any:
 		for _, i := range vv {
 			tk, i := unwrapValue(i, &lt)
-
 			subject, ok := i.(string)
 			if !ok {
 				return nil, &configErr{tk, "Subject in permissions array cannot be cast to string"}
@@ -4338,7 +4155,6 @@ func parsePermSubjects(v any, errors *[]error) ([]string, error) {
 func parseAllowResponses(v any, errors *[]error) *ResponsePermission {
 	var lt token
 	defer convertPanicToErrorList(&lt, errors)
-
 	tk, v := unwrapValue(v, &lt)
 	// Check if this is a map.
 	pm, ok := v.(map[string]any)
@@ -4347,12 +4163,10 @@ func parseAllowResponses(v any, errors *[]error) *ResponsePermission {
 		*errors = append(*errors, err)
 		return nil
 	}
-
 	rp := &ResponsePermission{
 		MaxMsgs: DEFAULT_ALLOW_RESPONSE_MAX_MSGS,
 		Expires: DEFAULT_ALLOW_RESPONSE_EXPIRATION,
 	}
-
 	for k, v := range pm {
 		tk, v = unwrapValue(v, &lt)
 		switch strings.ToLower(k) {
@@ -4405,7 +4219,6 @@ func parseOldPermissionStyle(v any, errors *[]error) (*SubjectPermission, error)
 func parseSubjectPermission(v any, errors *[]error) (*SubjectPermission, error) {
 	var lt token
 	defer convertPanicToErrorList(&lt, errors)
-
 	m := v.(map[string]any)
 	if len(m) == 0 {
 		return nil, nil
@@ -4471,16 +4284,13 @@ func PrintTLSHelpAndDie() {
 	fmt.Printf("%s", OCSPResponseCacheUsage)
 	os.Exit(0)
 }
-
 func parseCipher(cipherName string) (uint16, error) {
 	cipher, exists := cipherMap[cipherName]
 	if !exists {
 		return 0, fmt.Errorf("unrecognized cipher %s", cipherName)
 	}
-
 	return cipher, nil
 }
-
 func parseCurvePreferences(curveName string) (tls.CurveID, error) {
 	curve, exists := curvePreferenceMap[curveName]
 	if !exists {
@@ -4497,7 +4307,6 @@ func parseTLS(v any, isClientCtx bool) (t *TLSConfigOpts, retErr error) {
 		lt   token
 	)
 	defer convertPanicToError(&lt, &retErr)
-
 	tk, v := unwrapValue(v, &lt)
 	tlsm = v.(map[string]any)
 	for mk, mv := range tlsm {
@@ -4761,20 +4570,16 @@ func parseTLS(v any, isClientCtx bool) (t *TLSConfigOpts, retErr error) {
 	if len(tc.Certificates) > 0 && tc.CertFile != _EMPTY_ {
 		return nil, &configErr{tk, "error parsing tls config, cannot combine 'cert_file' option with 'certs' option"}
 	}
-
 	// If cipher suites were not specified then use the defaults
 	if tc.Ciphers == nil {
 		tc.Ciphers = defaultCipherSuites()
 	}
-
 	// If curve preferences were not specified, then use the defaults
 	if tc.CurvePreferences == nil {
 		tc.CurvePreferences = defaultCurvePreferences()
 	}
-
 	return &tc, nil
 }
-
 func parseSimpleAuth(v any, errors *[]error) *authorization {
 	var (
 		am   map[string]any
@@ -4783,7 +4588,6 @@ func parseSimpleAuth(v any, errors *[]error) *authorization {
 		auth = &authorization{}
 	)
 	defer convertPanicToErrorList(&lt, errors)
-
 	_, v = unwrapValue(v, &lt)
 	am = v.(map[string]any)
 	for mk, mv := range am {
@@ -4819,7 +4623,6 @@ func parseSimpleAuth(v any, errors *[]error) *authorization {
 	}
 	return auth
 }
-
 func parseStringArray(fieldName string, tk token, lt *token, mv any, errors *[]error) ([]string, error) {
 	switch mv := mv.(type) {
 	case string:
@@ -4843,11 +4646,9 @@ func parseStringArray(fieldName string, tk token, lt *token, mv any, errors *[]e
 		return nil, err
 	}
 }
-
 func parseWebsocket(v any, o *Options, errors *[]error) error {
 	var lt token
 	defer convertPanicToErrorList(&lt, errors)
-
 	tk, v := unwrapValue(v, &lt)
 	gm, ok := v.(map[string]any)
 	if !ok {
@@ -4960,11 +4761,9 @@ func parseWebsocket(v any, o *Options, errors *[]error) error {
 	}
 	return nil
 }
-
 func parseMQTT(v any, o *Options, errors *[]error, warnings *[]error) error {
 	var lt token
 	defer convertPanicToErrorList(&lt, errors)
-
 	tk, v := unwrapValue(v, &lt)
 	gm, ok := v.(map[string]any)
 	if !ok {
@@ -5037,12 +4836,10 @@ func parseMQTT(v any, o *Options, errors *[]error, warnings *[]error) error {
 			o.MQTT.ConsumerMemoryStorage = mv.(bool)
 		case "consumer_inactive_threshold", "consumer_auto_cleanup":
 			o.MQTT.ConsumerInactiveThreshold = parseDuration("consumer_inactive_threshold", tk, mv, errors, warnings)
-
 		case "reject_qos2_publish":
 			o.MQTT.rejectQoS2Pub = mv.(bool)
 		case "downgrade_qos2_subscribe":
 			o.MQTT.downgradeQoS2Sub = mv.(bool)
-
 		default:
 			if !tk.IsUsedVariable() {
 				err := &unknownConfigFieldErr{
@@ -5071,7 +4868,6 @@ func GenTLSConfig(tc *TLSConfigOpts) (*tls.Config, error) {
 		CurvePreferences:         tc.CurvePreferences,
 		InsecureSkipVerify:       tc.Insecure,
 	}
-
 	switch {
 	case tc.CertFile != _EMPTY_ && tc.CertStore != certstore.STOREEMPTY:
 		return nil, certstore.ErrConflictCertFileAndStore
@@ -5110,7 +4906,6 @@ func GenTLSConfig(tc *TLSConfigOpts) (*tls.Config, error) {
 			config.Certificates[i] = cert
 		}
 	}
-
 	// Require client certificates as needed
 	if tc.Verify {
 		config.ClientAuth = tls.RequireAndVerifyClientCert
@@ -5128,7 +4923,6 @@ func GenTLSConfig(tc *TLSConfigOpts) (*tls.Config, error) {
 		}
 		config.ClientCAs = pool
 	}
-
 	return &config, nil
 }
 
@@ -5143,7 +4937,6 @@ func MergeOptions(fileOpts, flagOpts *Options) *Options {
 	}
 	// Merge the two, flagOpts override
 	opts := *fileOpts
-
 	if flagOpts.Port != 0 {
 		opts.Port = flagOpts.Port
 	}
@@ -5242,7 +5035,6 @@ func mergeRoutes(opts, flagOpts *Options) {
 func RemoveSelfReference(clusterPort int, routes []*url.URL) ([]*url.URL, error) {
 	var cleanRoutes []*url.URL
 	cport := strconv.Itoa(clusterPort)
-
 	selfIPs, err := getInterfaceIPs()
 	if err != nil {
 		return nil, err
@@ -5252,7 +5044,6 @@ func RemoveSelfReference(clusterPort int, routes []*url.URL) ([]*url.URL, error)
 		if err != nil {
 			return nil, err
 		}
-
 		ipList, err := getURLIP(host)
 		if err != nil {
 			return nil, err
@@ -5262,10 +5053,8 @@ func RemoveSelfReference(clusterPort int, routes []*url.URL) ([]*url.URL, error)
 		}
 		cleanRoutes = append(cleanRoutes, r)
 	}
-
 	return cleanRoutes, nil
 }
-
 func isIPInList(list1 []net.IP, list2 []net.IP) bool {
 	for _, ip1 := range list1 {
 		for _, ip2 := range list2 {
@@ -5276,16 +5065,13 @@ func isIPInList(list1 []net.IP, list2 []net.IP) bool {
 	}
 	return false
 }
-
 func getURLIP(ipStr string) ([]net.IP, error) {
 	ipList := []net.IP{}
-
 	ip := net.ParseIP(ipStr)
 	if ip != nil {
 		ipList = append(ipList, ip)
 		return ipList, nil
 	}
-
 	hostAddr, err := net.LookupHost(ipStr)
 	if err != nil {
 		return nil, fmt.Errorf("Error looking up host with route hostname: %v", err)
@@ -5298,15 +5084,12 @@ func getURLIP(ipStr string) ([]net.IP, error) {
 	}
 	return ipList, nil
 }
-
 func getInterfaceIPs() ([]net.IP, error) {
 	var localIPs []net.IP
-
 	interfaceAddr, err := net.InterfaceAddrs()
 	if err != nil {
 		return nil, fmt.Errorf("Error getting self referencing address: %v", err)
 	}
-
 	for i := 0; i < len(interfaceAddr); i++ {
 		interfaceIP, _, _ := net.ParseCIDR(interfaceAddr[i].String())
 		if net.ParseIP(interfaceIP.String()) != nil {
@@ -5317,7 +5100,6 @@ func getInterfaceIPs() ([]net.IP, error) {
 	}
 	return localIPs, nil
 }
-
 func setBaselineOptions(opts *Options) {
 	// Setup non-standard Go defaults
 	if opts.Host == _EMPTY_ {
@@ -5434,12 +5216,10 @@ func setBaselineOptions(opts *Options) {
 			}
 		}
 	}
-
 	// Set this regardless of opts.LeafNode.Port
 	if opts.LeafNode.ReconnectInterval == 0 {
 		opts.LeafNode.ReconnectInterval = DEFAULT_LEAF_NODE_RECONNECT
 	}
-
 	if opts.MaxControlLine == 0 {
 		opts.MaxControlLine = MAX_CONTROL_LINE_SIZE
 	}
@@ -5502,7 +5282,6 @@ func setBaselineOptions(opts *Options) {
 		opts.SyncInterval = defaultSyncInterval
 	}
 }
-
 func getDefaultAuthTimeout(tls *tls.Config, tlsTimeout float64) float64 {
 	var authTimeout float64
 	if tls != nil {
@@ -5530,7 +5309,6 @@ func ConfigureOptions(fs *flag.FlagSet, args []string, printVersion, printHelp, 
 		dbgAndTrcAndVerboseTrc bool
 		err                    error
 	)
-
 	fs.BoolVar(&showHelp, "h", false, "Show this message.")
 	fs.BoolVar(&showHelp, "help", false, "Show this message.")
 	fs.IntVar(&opts.Port, "port", 0, "Port to listen on.")
@@ -5595,7 +5373,6 @@ func ConfigureOptions(fs *flag.FlagSet, args []string, printVersion, printHelp, 
 	fs.BoolVar(&opts.JetStream, "jetstream", false, "Enable JetStream.")
 	fs.StringVar(&opts.StoreDir, "sd", _EMPTY_, "Storage directory.")
 	fs.StringVar(&opts.StoreDir, "store_dir", _EMPTY_, "Storage directory.")
-
 	// The flags definition above set "default" values to some of the options.
 	// Calling Parse() here will override the default options with any value
 	// specified from the command line. This is ok. We will then update the
@@ -5607,22 +5384,18 @@ func ConfigureOptions(fs *flag.FlagSet, args []string, printVersion, printHelp, 
 	if err := fs.Parse(args); err != nil {
 		return nil, err
 	}
-
 	if showVersion {
 		printVersion()
 		return nil, nil
 	}
-
 	if showHelp {
 		printHelp()
 		return nil, nil
 	}
-
 	if showTLSHelp {
 		printTLSHelp()
 		return nil, nil
 	}
-
 	// Process args looking for non-flag options,
 	// 'version' and 'help' only for now
 	showVersion, showHelp, err = ProcessCommandLineArgs(fs)
@@ -5635,10 +5408,8 @@ func ConfigureOptions(fs *flag.FlagSet, args []string, printVersion, printHelp, 
 		printHelp()
 		return nil, nil
 	}
-
 	// Snapshot flag options.
 	FlagSnapshot = opts.Clone()
-
 	// Keep track of the boolean flags that were explicitly set with their value.
 	fs.Visit(func(f *flag.Flag) {
 		switch f.Name {
@@ -5672,14 +5443,12 @@ func ConfigureOptions(fs *flag.FlagSet, args []string, printVersion, printHelp, 
 			trackExplicitVal(&FlagSnapshot.inCmdLine, "Cluster.NoAdvertise", FlagSnapshot.Cluster.NoAdvertise)
 		}
 	})
-
 	// Process signal control.
 	if signal != _EMPTY_ {
 		if err := processSignal(signal); err != nil {
 			return nil, err
 		}
 	}
-
 	// Parse config if given
 	if configFile != _EMPTY_ {
 		// This will update the options with values from the config file.
@@ -5697,7 +5466,6 @@ func ConfigureOptions(fs *flag.FlagSet, args []string, printVersion, printHelp, 
 			// Report configuration file syntax test was successful and exit.
 			return opts, nil
 		}
-
 		// Call this again to override config file options with options from command line.
 		// Note: We don't need to check error here since if there was an error, it would
 		// have been caught the first time this function was called (after setting up the
@@ -5706,7 +5474,6 @@ func ConfigureOptions(fs *flag.FlagSet, args []string, printVersion, printHelp, 
 	} else if opts.CheckConfig {
 		return nil, fmt.Errorf("must specify [-c, --config] option to check configuration file syntax")
 	}
-
 	// Special handling of some flags
 	var (
 		flagErr     error
@@ -5758,7 +5525,6 @@ func ConfigureOptions(fs *flag.FlagSet, args []string, printVersion, printHelp, 
 	if flagErr != nil {
 		return nil, flagErr
 	}
-
 	// This will be true if some of the `-tls` params have been set and
 	// `-tls=false` has not been set.
 	if tlsOverride {
@@ -5766,17 +5532,14 @@ func ConfigureOptions(fs *flag.FlagSet, args []string, printVersion, printHelp, 
 			return nil, err
 		}
 	}
-
 	// If we don't have cluster defined in the configuration
 	// file and no cluster listen string override, but we do
 	// have a routes override, we need to report misconfiguration.
 	if opts.RoutesStr != _EMPTY_ && opts.Cluster.ListenStr == _EMPTY_ && opts.Cluster.Host == _EMPTY_ && opts.Cluster.Port == 0 {
 		return nil, errors.New("solicited routes require cluster capabilities, e.g. --cluster")
 	}
-
 	return opts, nil
 }
-
 func normalizeBasePath(p string) string {
 	if len(p) == 0 {
 		return "/"
@@ -5796,14 +5559,12 @@ func overrideTLS(opts *Options) error {
 	if opts.TLSKey == _EMPTY_ {
 		return errors.New("TLS Server private key must be present and valid")
 	}
-
 	tc := TLSConfigOpts{}
 	tc.CertFile = opts.TLSCert
 	tc.KeyFile = opts.TLSKey
 	tc.CaFile = opts.TLSCaCert
 	tc.Verify = opts.TLSVerify
 	tc.Ciphers = defaultCipherSuites()
-
 	var err error
 	opts.TLSConfig, err = GenTLSConfig(&tc)
 	return err
@@ -5843,14 +5604,12 @@ func overrideCluster(opts *Options) error {
 	if err != nil {
 		return err
 	}
-
 	if clusterURL.User != nil {
 		pass, hasPassword := clusterURL.User.Password()
 		if !hasPassword {
 			return errors.New("expected cluster password to be set")
 		}
 		opts.Cluster.Password = pass
-
 		user := clusterURL.User.Username()
 		opts.Cluster.Username = user
 	} else {
@@ -5859,10 +5618,8 @@ func overrideCluster(opts *Options) error {
 		opts.Cluster.Username = _EMPTY_
 		opts.Cluster.Password = _EMPTY_
 	}
-
 	return nil
 }
-
 func processSignal(signal string) error {
 	var (
 		pid           string
@@ -5890,12 +5647,10 @@ func maybeReadPidFile(pidStr string) string {
 	}
 	return pidStr
 }
-
 func homeDir() (string, error) {
 	if runtime.GOOS == "windows" {
 		homeDrive, homePath := os.Getenv("HOMEDRIVE"), os.Getenv("HOMEPATH")
 		userProfile := os.Getenv("USERPROFILE")
-
 		home := filepath.Join(homeDrive, homePath)
 		if homeDrive == _EMPTY_ || homePath == _EMPTY_ {
 			if userProfile == _EMPTY_ {
@@ -5903,28 +5658,22 @@ func homeDir() (string, error) {
 			}
 			home = userProfile
 		}
-
 		return home, nil
 	}
-
 	home := os.Getenv("HOME")
 	if home == _EMPTY_ {
 		return _EMPTY_, errors.New("failed to get home dir, require $HOME")
 	}
 	return home, nil
 }
-
 func expandPath(p string) (string, error) {
 	p = os.ExpandEnv(p)
-
 	if !strings.HasPrefix(p, "~") {
 		return p, nil
 	}
-
 	home, err := homeDir()
 	if err != nil {
 		return _EMPTY_, err
 	}
-
 	return filepath.Join(home, p[1:]), nil
 }

@@ -10,19 +10,17 @@
 // WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 // See the License for the specific language governing permissions and
 // limitations under the License.
-
 package server
 
 import (
 	"encoding/binary"
 	"errors"
 	"fmt"
+	"github.com/nats-io/nats-server/v2/server/avl"
 	"io"
 	"strings"
 	"time"
 	"unsafe"
-
-	"github.com/nats-io/nats-server/v2/server/avl"
 )
 
 // StorageType determines how messages are stored for retention.
@@ -82,7 +80,6 @@ type StoreMsg struct {
 // Used to call back into the upper layers to report on changes in storage resources.
 // For the cases where its a single message we will also supply sequence number and subject.
 type StorageUpdateHandler func(msgs, bytes int64, seq uint64, subj string)
-
 type StreamStore interface {
 	StoreMsg(subject string, hdr, msg []byte) (uint64, int64, error)
 	StoreRawMsg(subject string, hdr, msg []byte, seq uint64, ts int64) error
@@ -146,17 +143,17 @@ const (
 
 // StreamState is information about the given stream.
 type StreamState struct {
+	FirstTime   time.Time         `json:"first_ts"`
+	LastTime    time.Time         `json:"last_ts"`
+	Subjects    map[string]uint64 `json:"subjects,omitempty"`
+	Lost        *LostStreamData   `json:"lost,omitempty"`
+	Deleted     []uint64          `json:"deleted,omitempty"`
 	Msgs        uint64            `json:"messages"`
 	Bytes       uint64            `json:"bytes"`
 	FirstSeq    uint64            `json:"first_seq"`
-	FirstTime   time.Time         `json:"first_ts"`
 	LastSeq     uint64            `json:"last_seq"`
-	LastTime    time.Time         `json:"last_ts"`
 	NumSubjects int               `json:"num_subjects,omitempty"`
-	Subjects    map[string]uint64 `json:"subjects,omitempty"`
 	NumDeleted  int               `json:"num_deleted,omitempty"`
-	Deleted     []uint64          `json:"deleted,omitempty"`
-	Lost        *LostStreamData   `json:"lost,omitempty"`
 	Consumers   int               `json:"consumer_count"`
 }
 
@@ -165,7 +162,6 @@ type SimpleState struct {
 	Msgs  uint64 `json:"messages"`
 	First uint64 `json:"first_seq"`
 	Last  uint64 `json:"last_seq"`
-
 	// Internal usage for when the first needs to be updated before use.
 	firstNeedsUpdate bool
 }
@@ -202,18 +198,17 @@ type DeleteBlock interface {
 	State() (first, last, num uint64)
 	Range(f func(uint64) bool)
 }
-
 type DeleteBlocks []DeleteBlock
 
 // StreamReplicatedState represents what is encoded in a binary stream snapshot used
 // for stream replication in an NRG.
 type StreamReplicatedState struct {
+	Deleted  DeleteBlocks
 	Msgs     uint64
 	Bytes    uint64
 	FirstSeq uint64
 	LastSeq  uint64
 	Failed   uint64
-	Deleted  DeleteBlocks
 }
 
 // Determine if this is an encoded stream state.
@@ -229,7 +224,6 @@ func DecodeStreamState(buf []byte) (*StreamReplicatedState, error) {
 		return nil, ErrBadStreamStateEncoding
 	}
 	var bi = hdrLen
-
 	readU64 := func() uint64 {
 		if bi < 0 || bi >= len(buf) {
 			bi = -1
@@ -243,21 +237,17 @@ func DecodeStreamState(buf []byte) (*StreamReplicatedState, error) {
 		bi += n
 		return num
 	}
-
 	parserFailed := func() bool {
 		return bi < 0
 	}
-
 	ss.Msgs = readU64()
 	ss.Bytes = readU64()
 	ss.FirstSeq = readU64()
 	ss.LastSeq = readU64()
 	ss.Failed = readU64()
-
 	if parserFailed() {
 		return nil, ErrCorruptStreamState
 	}
-
 	if numDeleted := readU64(); numDeleted > 0 {
 		// If we have some deleted blocks.
 		for l := len(buf); l > bi; {
@@ -283,7 +273,6 @@ func DecodeStreamState(buf []byte) (*StreamReplicatedState, error) {
 			}
 		}
 	}
-
 	return ss, nil
 }
 
@@ -324,7 +313,6 @@ func (ds DeleteSlice) Range(f func(uint64) bool) {
 		}
 	}
 }
-
 func (dbs DeleteBlocks) NumDeleted() (total uint64) {
 	for _, db := range dbs {
 		_, _, num := db.State()
@@ -358,23 +346,22 @@ type SequencePair struct {
 
 // ConsumerState represents a stored state for a consumer.
 type ConsumerState struct {
-	// Delivered keeps track of last delivered sequence numbers for both the stream and the consumer.
-	Delivered SequencePair `json:"delivered"`
-	// AckFloor keeps track of the ack floors for both the stream and the consumer.
-	AckFloor SequencePair `json:"ack_floor"`
 	// These are both in stream sequence context.
 	// Pending is for all messages pending and the timestamp for the delivered time.
 	// This will only be present when the AckPolicy is ExplicitAck.
 	Pending map[uint64]*Pending `json:"pending,omitempty"`
 	// This is for messages that have been redelivered, so count > 1.
 	Redelivered map[uint64]uint64 `json:"redelivered,omitempty"`
+	// Delivered keeps track of last delivered sequence numbers for both the stream and the consumer.
+	Delivered SequencePair `json:"delivered"`
+	// AckFloor keeps track of the ack floors for both the stream and the consumer.
+	AckFloor SequencePair `json:"ack_floor"`
 }
 
 // Encode consumer state.
 func encodeConsumerState(state *ConsumerState) []byte {
 	var hdr [seqsHdrSize]byte
 	var buf []byte
-
 	maxSize := seqsHdrSize
 	if lp := len(state.Pending); lp > 0 {
 		maxSize += lp*(3*binary.MaxVarintLen64) + binary.MaxVarintLen64
@@ -387,28 +374,23 @@ func encodeConsumerState(state *ConsumerState) []byte {
 	} else {
 		buf = make([]byte, maxSize)
 	}
-
 	// Write header
 	buf[0] = magic
 	buf[1] = 2
-
 	n := hdrLen
 	n += binary.PutUvarint(buf[n:], state.AckFloor.Consumer)
 	n += binary.PutUvarint(buf[n:], state.AckFloor.Stream)
 	n += binary.PutUvarint(buf[n:], state.Delivered.Consumer)
 	n += binary.PutUvarint(buf[n:], state.Delivered.Stream)
 	n += binary.PutUvarint(buf[n:], uint64(len(state.Pending)))
-
 	asflr := state.AckFloor.Stream
 	adflr := state.AckFloor.Consumer
-
 	// These are optional, but always write len. This is to avoid a truncate inline.
 	if len(state.Pending) > 0 {
 		// To save space we will use now rounded to seconds to be our base timestamp.
 		mints := time.Now().Round(time.Second).Unix()
 		// Write minimum timestamp we found from above.
 		n += binary.PutVarint(buf[n:], mints)
-
 		for k, v := range state.Pending {
 			n += binary.PutUvarint(buf[n:], k-asflr)
 			n += binary.PutUvarint(buf[n:], v.Sequence-adflr)
@@ -418,10 +400,8 @@ func encodeConsumerState(state *ConsumerState) []byte {
 			n += binary.PutVarint(buf[n:], mints-ts)
 		}
 	}
-
 	// We always write the redelivered len.
 	n += binary.PutUvarint(buf[n:], uint64(len(state.Redelivered)))
-
 	// We expect these to be small.
 	if len(state.Redelivered) > 0 {
 		for k, v := range state.Redelivered {
@@ -429,7 +409,6 @@ func encodeConsumerState(state *ConsumerState) []byte {
 			n += binary.PutUvarint(buf[n:], v)
 		}
 	}
-
 	return buf[:n]
 }
 
@@ -470,7 +449,6 @@ func (rp RetentionPolicy) String() string {
 		return "Unknown Retention Policy"
 	}
 }
-
 func (rp RetentionPolicy) MarshalJSON() ([]byte, error) {
 	switch rp {
 	case LimitsPolicy:
@@ -483,7 +461,6 @@ func (rp RetentionPolicy) MarshalJSON() ([]byte, error) {
 		return nil, fmt.Errorf("can not marshal %v", rp)
 	}
 }
-
 func (rp *RetentionPolicy) UnmarshalJSON(data []byte) error {
 	switch string(data) {
 	case limitsPolicyJSONString:
@@ -497,7 +474,6 @@ func (rp *RetentionPolicy) UnmarshalJSON(data []byte) error {
 	}
 	return nil
 }
-
 func (dp DiscardPolicy) String() string {
 	switch dp {
 	case DiscardOld:
@@ -508,7 +484,6 @@ func (dp DiscardPolicy) String() string {
 		return "Unknown Discard Policy"
 	}
 }
-
 func (dp DiscardPolicy) MarshalJSON() ([]byte, error) {
 	switch dp {
 	case DiscardOld:
@@ -519,7 +494,6 @@ func (dp DiscardPolicy) MarshalJSON() ([]byte, error) {
 		return nil, fmt.Errorf("can not marshal %v", dp)
 	}
 }
-
 func (dp *DiscardPolicy) UnmarshalJSON(data []byte) error {
 	switch strings.ToLower(string(data)) {
 	case `"old"`:
@@ -556,7 +530,6 @@ func (st StorageType) String() string {
 		return "Unknown Storage Type"
 	}
 }
-
 func (st StorageType) MarshalJSON() ([]byte, error) {
 	switch st {
 	case MemoryStorage:
@@ -569,7 +542,6 @@ func (st StorageType) MarshalJSON() ([]byte, error) {
 		return nil, fmt.Errorf("can not marshal %v", st)
 	}
 }
-
 func (st *StorageType) UnmarshalJSON(data []byte) error {
 	switch string(data) {
 	case memoryStorageJSONString:
@@ -608,7 +580,6 @@ func (ap AckPolicy) MarshalJSON() ([]byte, error) {
 		return nil, fmt.Errorf("can not marshal %v", ap)
 	}
 }
-
 func (ap *AckPolicy) UnmarshalJSON(data []byte) error {
 	switch string(data) {
 	case ackNonePolicyJSONString:
@@ -643,7 +614,6 @@ func (rp ReplayPolicy) MarshalJSON() ([]byte, error) {
 		return nil, fmt.Errorf("can not marshal %v", rp)
 	}
 }
-
 func (rp *ReplayPolicy) UnmarshalJSON(data []byte) error {
 	switch string(data) {
 	case replayInstantPolicyJSONString:
@@ -693,10 +663,8 @@ func (p *DeliverPolicy) UnmarshalJSON(data []byte) error {
 	default:
 		return fmt.Errorf("can not unmarshal %q", data)
 	}
-
 	return nil
 }
-
 func (p DeliverPolicy) MarshalJSON() ([]byte, error) {
 	switch p {
 	case DeliverAll:
@@ -715,7 +683,6 @@ func (p DeliverPolicy) MarshalJSON() ([]byte, error) {
 		return deliverUndefinedJSONBytes, nil
 	}
 }
-
 func isOutOfSpaceErr(err error) bool {
 	return err != nil && (strings.Contains(err.Error(), "no space left"))
 }

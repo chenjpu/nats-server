@@ -10,7 +10,6 @@
 // WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 // See the License for the specific language governing permissions and
 // limitations under the License.
-
 package avl
 
 import (
@@ -164,7 +163,6 @@ func (ss *SequenceSet) MinMax() (min, max uint64) {
 	}
 	return min, max
 }
-
 func clone(src *node, target **node) {
 	if src == nil {
 		return
@@ -182,7 +180,6 @@ func (ss *SequenceSet) Clone() *SequenceSet {
 	}
 	css := &SequenceSet{nodes: ss.nodes, size: ss.size}
 	clone(ss.root, &css.root)
-
 	return css
 }
 
@@ -211,7 +208,6 @@ func Union(ssa ...*SequenceSet) *SequenceSet {
 	// Sort so we can clone largest.
 	sort.Slice(ssa, func(i, j int) bool { return ssa[i].Size() > ssa[j].Size() })
 	ss := ssa[0].Clone()
-
 	// Insert the rest through range call.
 	for i := 1; i < len(ssa); i++ {
 		ssa[i].Range(func(n uint64) bool {
@@ -237,20 +233,16 @@ const (
 func (ss SequenceSet) EncodeLen() int {
 	return minLen + (ss.Nodes() * ((numBuckets+1)*8 + 2))
 }
-
 func (ss SequenceSet) Encode(buf []byte) ([]byte, error) {
 	nn, encLen := ss.Nodes(), ss.EncodeLen()
-
 	if cap(buf) < encLen {
 		buf = make([]byte, encLen)
 	} else {
 		buf = buf[:encLen]
 	}
-
 	// TODO(dlc) - Go 1.19 introduced Append to not have to keep track.
 	// Once 1.20 is out we could change this over.
 	// Also binary.Write() is way slower, do not use.
-
 	var le = binary.LittleEndian
 	buf[0], buf[1] = magic, version
 	i := hdrLen
@@ -282,7 +274,6 @@ func Decode(buf []byte) (*SequenceSet, int, error) {
 	if len(buf) < minLen || buf[0] != magic {
 		return nil, -1, ErrBadEncoding
 	}
-
 	switch v := buf[1]; v {
 	case 1:
 		return decodev1(buf)
@@ -300,14 +291,11 @@ func decodev2(buf []byte) (*SequenceSet, int, error) {
 	nn := int(le.Uint32(buf[index:]))
 	sz := int(le.Uint32(buf[index+4:]))
 	index += 8
-
 	expectedLen := minLen + (nn * ((numBuckets+1)*8 + 2))
 	if len(buf) < expectedLen {
 		return nil, -1, ErrBadEncoding
 	}
-
 	ss, nodes := SequenceSet{size: sz}, make([]node, nn)
-
 	for i := 0; i < nn; i++ {
 		n := &nodes[i]
 		n.base = le.Uint64(buf[index:])
@@ -320,7 +308,6 @@ func decodev2(buf []byte) (*SequenceSet, int, error) {
 		index += 2
 		ss.insertNode(n)
 	}
-
 	return &ss, index, nil
 }
 
@@ -331,14 +318,11 @@ func decodev1(buf []byte) (*SequenceSet, int, error) {
 	nn := int(le.Uint32(buf[index:]))
 	sz := int(le.Uint32(buf[index+4:]))
 	index += 8
-
 	const v1NumBuckets = 64
-
 	expectedLen := minLen + (nn * ((v1NumBuckets+1)*8 + 2))
 	if len(buf) < expectedLen {
 		return nil, -1, ErrBadEncoding
 	}
-
 	var ss SequenceSet
 	for i := 0; i < nn; i++ {
 		base := le.Uint64(buf[index:])
@@ -358,14 +342,11 @@ func decodev1(buf []byte) (*SequenceSet, int, error) {
 		// Skip over encoded height.
 		index += 2
 	}
-
 	// Sanity check.
 	if ss.Size() != sz {
 		return nil, -1, ErrBadEncoding
 	}
-
 	return &ss, index, nil
-
 }
 
 // insertNode places a decoded node into the tree.
@@ -374,7 +355,6 @@ func decodev1(buf []byte) (*SequenceSet, int, error) {
 // So much better performance this way.
 func (ss *SequenceSet) insertNode(n *node) {
 	ss.nodes++
-
 	if ss.root == nil {
 		ss.root = n
 		return
@@ -404,11 +384,11 @@ const (
 )
 
 type node struct {
-	//v dvalue
-	base uint64
-	bits [numBuckets]uint64
 	l    *node
 	r    *node
+	bits [numBuckets]uint64
+	//v dvalue
+	base uint64
 	h    int
 }
 
@@ -423,7 +403,6 @@ func (n *node) set(seq uint64, inserted *bool) {
 		*inserted = true
 	}
 }
-
 func (n *node) insert(seq uint64, inserted *bool, nodes *int) *node {
 	if n == nil {
 		base := (seq / numEntries) * numEntries
@@ -432,7 +411,6 @@ func (n *node) insert(seq uint64, inserted *bool, nodes *int) *node {
 		*nodes++
 		return n
 	}
-
 	if seq < n.base {
 		n.l = n.l.insert(seq, inserted, nodes)
 	} else if seq >= n.base+numEntries {
@@ -440,9 +418,7 @@ func (n *node) insert(seq uint64, inserted *bool, nodes *int) *node {
 	} else {
 		n.set(seq, inserted)
 	}
-
 	n.h = maxH(n) + 1
-
 	// Don't make a function, impacts performance.
 	if bf := balanceF(n); bf > 1 {
 		// Left unbalanced.
@@ -459,7 +435,6 @@ func (n *node) insert(seq uint64, inserted *bool, nodes *int) *node {
 	}
 	return n
 }
-
 func (n *node) rotateL() *node {
 	r := n.r
 	if r != nil {
@@ -473,7 +448,6 @@ func (n *node) rotateL() *node {
 	}
 	return r
 }
-
 func (n *node) rotateR() *node {
 	l := n.l
 	if l != nil {
@@ -487,7 +461,6 @@ func (n *node) rotateR() *node {
 	}
 	return l
 }
-
 func balanceF(n *node) int {
 	if n == nil {
 		return 0
@@ -501,7 +474,6 @@ func balanceF(n *node) int {
 	}
 	return lh - rh
 }
-
 func maxH(n *node) int {
 	if n == nil {
 		return 0
@@ -537,12 +509,10 @@ func (n *node) clear(seq uint64, deleted *bool) bool {
 	}
 	return true
 }
-
 func (n *node) delete(seq uint64, deleted *bool, nodes *int) *node {
 	if n == nil {
 		return nil
 	}
-
 	if seq < n.base {
 		n.l = n.l.delete(seq, deleted, nodes)
 	} else if seq >= n.base+numEntries {
@@ -559,11 +529,9 @@ func (n *node) delete(seq uint64, deleted *bool, nodes *int) *node {
 			n = n.r
 		}
 	}
-
 	if n != nil {
 		n.h = maxH(n) + 1
 	}
-
 	// Check balance.
 	if bf := balanceF(n); bf > 1 {
 		// Left unbalanced.
@@ -578,7 +546,6 @@ func (n *node) delete(seq uint64, deleted *bool, nodes *int) *node {
 		}
 		return n.rotateL()
 	}
-
 	return n
 }
 
@@ -591,7 +558,6 @@ func (n *node) insertNodePrev(nn *node) *node {
 		n.l = n.l.insertNodePrev(nn)
 	}
 	n.h = maxH(n) + 1
-
 	// Check balance.
 	if bf := balanceF(n); bf > 1 {
 		// Left unbalanced.
@@ -608,7 +574,6 @@ func (n *node) insertNodePrev(nn *node) *node {
 	}
 	return n
 }
-
 func (n *node) exists(seq uint64) bool {
 	seq -= n.base
 	i := seq / bitsPerBucket
@@ -658,7 +623,6 @@ func (n *node) iter(f func(uint64) bool) bool {
 	if n == nil {
 		return true
 	}
-
 	if ok := n.l.iter(f); !ok {
 		return false
 	}
@@ -672,6 +636,5 @@ func (n *node) iter(f func(uint64) bool) bool {
 	if ok := n.r.iter(f); !ok {
 		return false
 	}
-
 	return true
 }

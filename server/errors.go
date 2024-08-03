@@ -10,7 +10,6 @@
 // WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 // See the License for the specific language governing permissions and
 // limitations under the License.
-
 package server
 
 import (
@@ -21,231 +20,164 @@ import (
 var (
 	// ErrConnectionClosed represents an error condition on a closed connection.
 	ErrConnectionClosed = errors.New("connection closed")
-
 	// ErrAuthentication represents an error condition on failed authentication.
 	ErrAuthentication = errors.New("authentication error")
-
 	// ErrAuthTimeout represents an error condition on failed authorization due to timeout.
 	ErrAuthTimeout = errors.New("authentication timeout")
-
 	// ErrAuthExpired represents an expired authorization due to timeout.
 	ErrAuthExpired = errors.New("authentication expired")
-
 	// ErrMaxPayload represents an error condition when the payload is too big.
 	ErrMaxPayload = errors.New("maximum payload exceeded")
-
 	// ErrMaxControlLine represents an error condition when the control line is too big.
 	ErrMaxControlLine = errors.New("maximum control line exceeded")
-
 	// ErrReservedPublishSubject represents an error condition when sending to a reserved subject, e.g. _SYS.>
 	ErrReservedPublishSubject = errors.New("reserved internal subject")
-
 	// ErrBadPublishSubject represents an error condition for an invalid publish subject.
 	ErrBadPublishSubject = errors.New("invalid publish subject")
-
 	// ErrBadSubject represents an error condition for an invalid subject.
 	ErrBadSubject = errors.New("invalid subject")
-
 	// ErrBadQualifier is used to error on a bad qualifier for a transform.
 	ErrBadQualifier = errors.New("bad qualifier")
-
 	// ErrBadClientProtocol signals a client requested an invalid client protocol.
 	ErrBadClientProtocol = errors.New("invalid client protocol")
-
 	// ErrTooManyConnections signals a client that the maximum number of connections supported by the
 	// server has been reached.
 	ErrTooManyConnections = errors.New("maximum connections exceeded")
-
 	// ErrTooManyAccountConnections signals that an account has reached its maximum number of active
 	// connections.
 	ErrTooManyAccountConnections = errors.New("maximum account active connections exceeded")
-
 	// ErrLeafNodeLoop signals a leafnode is trying to register for a cluster we already have registered.
 	ErrLeafNodeLoop = errors.New("leafnode loop detected")
-
 	// ErrTooManySubs signals a client that the maximum number of subscriptions per connection
 	// has been reached.
 	ErrTooManySubs = errors.New("maximum subscriptions exceeded")
-
 	// ErrTooManySubTokens signals a client that the subject has too many tokens.
 	ErrTooManySubTokens = errors.New("subject has exceeded number of tokens limit")
-
 	// ErrClientConnectedToRoutePort represents an error condition when a client
 	// attempted to connect to the route listen port.
 	ErrClientConnectedToRoutePort = errors.New("attempted to connect to route port")
-
 	// ErrClientConnectedToLeafNodePort represents an error condition when a client
 	// attempted to connect to the leaf node listen port.
 	ErrClientConnectedToLeafNodePort = errors.New("attempted to connect to leaf node port")
-
 	// ErrLeafNodeHasSameClusterName represents an error condition when a leafnode is a cluster
 	// and it has the same cluster name as the hub cluster.
 	ErrLeafNodeHasSameClusterName = errors.New("remote leafnode has same cluster name")
-
 	// ErrLeafNodeDisabled is when we disable leafnodes.
 	ErrLeafNodeDisabled = errors.New("leafnodes disabled")
-
 	// ErrConnectedToWrongPort represents an error condition when a connection is attempted
 	// to the wrong listen port (for instance a LeafNode to a client port, etc...)
 	ErrConnectedToWrongPort = errors.New("attempted to connect to wrong port")
-
 	// ErrAccountExists is returned when an account is attempted to be registered
 	// but already exists.
 	ErrAccountExists = errors.New("account exists")
-
 	// ErrBadAccount represents a malformed or incorrect account.
 	ErrBadAccount = errors.New("bad account")
-
 	// ErrReservedAccount represents a reserved account that can not be created.
 	ErrReservedAccount = errors.New("reserved account")
-
 	// ErrMissingAccount is returned when an account does not exist.
 	ErrMissingAccount = errors.New("account missing")
-
 	// ErrMissingService is returned when an account does not have an exported service.
 	ErrMissingService = errors.New("service missing")
-
 	// ErrBadServiceType is returned when latency tracking is being applied to non-singleton response types.
 	ErrBadServiceType = errors.New("bad service response type")
-
 	// ErrBadSampling is returned when the sampling for latency tracking is not 1 >= sample <= 100.
 	ErrBadSampling = errors.New("bad sampling percentage, should be 1-100")
-
 	// ErrAccountValidation is returned when an account has failed validation.
 	ErrAccountValidation = errors.New("account validation failed")
-
 	// ErrAccountExpired is returned when an account has expired.
 	ErrAccountExpired = errors.New("account expired")
-
 	// ErrNoAccountResolver is returned when we attempt an update but do not have an account resolver.
 	ErrNoAccountResolver = errors.New("account resolver missing")
-
 	// ErrAccountResolverUpdateTooSoon is returned when we attempt an update too soon to last request.
 	ErrAccountResolverUpdateTooSoon = errors.New("account resolver update too soon")
-
 	// ErrAccountResolverSameClaims is returned when same claims have been fetched.
 	ErrAccountResolverSameClaims = errors.New("account resolver no new claims")
-
 	// ErrStreamImportAuthorization is returned when a stream import is not authorized.
 	ErrStreamImportAuthorization = errors.New("stream import not authorized")
-
 	// ErrStreamImportBadPrefix is returned when a stream import prefix contains wildcards.
 	ErrStreamImportBadPrefix = errors.New("stream import prefix can not contain wildcard tokens")
-
 	// ErrStreamImportDuplicate is returned when a stream import is a duplicate of one that already exists.
 	ErrStreamImportDuplicate = errors.New("stream import already exists")
-
 	// ErrServiceImportAuthorization is returned when a service import is not authorized.
 	ErrServiceImportAuthorization = errors.New("service import not authorized")
-
 	// ErrImportFormsCycle is returned when an import would form a cycle.
 	ErrImportFormsCycle = errors.New("import forms a cycle")
-
 	// ErrCycleSearchDepth is returned when we have exceeded our maximum search depth..
 	ErrCycleSearchDepth = errors.New("search cycle depth exhausted")
-
 	// ErrClientOrRouteConnectedToGatewayPort represents an error condition when
 	// a client or route attempted to connect to the Gateway port.
 	ErrClientOrRouteConnectedToGatewayPort = errors.New("attempted to connect to gateway port")
-
 	// ErrWrongGateway represents an error condition when a server receives a connect
 	// request from a remote Gateway with a destination name that does not match the server's
 	// Gateway's name.
 	ErrWrongGateway = errors.New("wrong gateway")
-
 	// ErrGatewayNameHasSpaces signals that the gateway name contains spaces, which is not allowed.
 	ErrGatewayNameHasSpaces = errors.New("gateway name cannot contain spaces")
-
 	// ErrNoSysAccount is returned when an attempt to publish or subscribe is made
 	// when there is no internal system account defined.
 	ErrNoSysAccount = errors.New("system account not setup")
-
 	// ErrRevocation is returned when a credential has been revoked.
 	ErrRevocation = errors.New("credentials have been revoked")
-
 	// ErrServerNotRunning is used to signal an error that a server is not running.
 	ErrServerNotRunning = errors.New("server is not running")
-
 	// ErrServerNameHasSpaces signals that the server name contains spaces, which is not allowed.
 	ErrServerNameHasSpaces = errors.New("server name cannot contain spaces")
-
 	// ErrBadMsgHeader signals the parser detected a bad message header
 	ErrBadMsgHeader = errors.New("bad message header detected")
-
 	// ErrMsgHeadersNotSupported signals the parser detected a message header
 	// but they are not supported on this server.
 	ErrMsgHeadersNotSupported = errors.New("message headers not supported")
-
 	// ErrNoRespondersRequiresHeaders signals that a client needs to have headers
 	// on if they want no responders behavior.
 	ErrNoRespondersRequiresHeaders = errors.New("no responders requires headers support")
-
 	// ErrClusterNameConfigConflict signals that the options for cluster name in cluster and gateway are in conflict.
 	ErrClusterNameConfigConflict = errors.New("cluster name conflicts between cluster and gateway definitions")
-
 	// ErrClusterNameRemoteConflict signals that a remote server has a different cluster name.
 	ErrClusterNameRemoteConflict = errors.New("cluster name from remote server conflicts")
-
 	// ErrClusterNameHasSpaces signals that the cluster name contains spaces, which is not allowed.
 	ErrClusterNameHasSpaces = errors.New("cluster name cannot contain spaces")
-
 	// ErrMalformedSubject is returned when a subscription is made with a subject that does not conform to subject rules.
 	ErrMalformedSubject = errors.New("malformed subject")
-
 	// ErrSubscribePermissionViolation is returned when processing of a subscription fails due to permissions.
 	ErrSubscribePermissionViolation = errors.New("subscribe permission violation")
-
 	// ErrNoTransforms signals no subject transforms are available to map this subject.
 	ErrNoTransforms = errors.New("no matching transforms available")
-
 	// ErrCertNotPinned is returned when pinned certs are set and the certificate is not in it
 	ErrCertNotPinned = errors.New("certificate not pinned")
-
 	// ErrDuplicateServerName is returned when processing a server remote connection and
 	// the server reports that this server name is already used in the cluster.
 	ErrDuplicateServerName = errors.New("duplicate server name")
-
 	// ErrMinimumVersionRequired is returned when a connection is not at the minimum version required.
 	ErrMinimumVersionRequired = errors.New("minimum version required")
-
 	// ErrInvalidMappingDestination is used for all subject mapping destination errors
 	ErrInvalidMappingDestination = errors.New("invalid mapping destination")
-
 	// ErrInvalidMappingDestinationSubject is used to error on a bad transform destination mapping
 	ErrInvalidMappingDestinationSubject = fmt.Errorf("%w: invalid transform", ErrInvalidMappingDestination)
-
 	// ErrMappingDestinationNotUsingAllWildcards is used to error on a transform destination not using all of the token wildcards
 	ErrMappingDestinationNotUsingAllWildcards = fmt.Errorf("%w: not using all of the token wildcard(s)", ErrInvalidMappingDestination)
-
 	// ErrUnknownMappingDestinationFunction is returned when a subject mapping destination contains an unknown mustache-escaped mapping function.
 	ErrUnknownMappingDestinationFunction = fmt.Errorf("%w: unknown function", ErrInvalidMappingDestination)
-
 	// ErrMappingDestinationIndexOutOfRange is returned when the mapping destination function is passed an out of range wildcard index value for one of it's arguments
 	ErrMappingDestinationIndexOutOfRange = fmt.Errorf("%w: wildcard index out of range", ErrInvalidMappingDestination)
-
 	// ErrMappingDestinationNotEnoughArgs is returned when the mapping destination function is not passed enough arguments
 	ErrMappingDestinationNotEnoughArgs = fmt.Errorf("%w: not enough arguments passed to the function", ErrInvalidMappingDestination)
-
 	// ErrMappingDestinationInvalidArg is returned when the mapping destination function is passed and invalid argument
 	ErrMappingDestinationInvalidArg = fmt.Errorf("%w: function argument is invalid or in the wrong format", ErrInvalidMappingDestination)
-
 	// ErrMappingDestinationTooManyArgs is returned when the mapping destination function is passed too many arguments
 	ErrMappingDestinationTooManyArgs = fmt.Errorf("%w: too many arguments passed to the function", ErrInvalidMappingDestination)
-
 	// ErrMappingDestinationNotSupportedForImport is returned when you try to use a mapping function other than wildcard in a transform that needs to be reversible (i.e. an import)
 	ErrMappingDestinationNotSupportedForImport = fmt.Errorf("%w: the only mapping function allowed for import transforms is {{Wildcard()}}", ErrInvalidMappingDestination)
 )
 
 // mappingDestinationErr is a type of subject mapping destination error
 type mappingDestinationErr struct {
-	token string
 	err   error
+	token string
 }
 
 func (e *mappingDestinationErr) Error() string {
 	return fmt.Sprintf("%s in %s", e.err, e.token)
 }
-
 func (e *mappingDestinationErr) Is(target error) bool {
 	return target == ErrInvalidMappingDestination
 }
@@ -378,7 +310,6 @@ func ErrorIs(err, target error) bool {
 	if err == nil || target == nil {
 		return err == target
 	}
-
 	for {
 		if err == target {
 			return true

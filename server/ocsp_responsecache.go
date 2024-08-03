@@ -10,7 +10,6 @@
 // WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 // See the License for the specific language governing permissions and
 // limitations under the License.
-
 package server
 
 import (
@@ -18,6 +17,9 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"github.com/klauspost/compress/s2"
+	"github.com/nats-io/nats-server/v2/server/certidp"
+	"golang.org/x/crypto/ocsp"
 	"io"
 	"os"
 	"path"
@@ -26,11 +28,6 @@ import (
 	"sync"
 	"sync/atomic"
 	"time"
-
-	"github.com/klauspost/compress/s2"
-	"golang.org/x/crypto/ocsp"
-
-	"github.com/nats-io/nats-server/v2/server/certidp"
 )
 
 const (
@@ -54,10 +51,10 @@ var OCSPResponseCacheTypeMap = map[string]OCSPResponseCacheType{
 }
 
 type OCSPResponseCacheConfig struct {
-	Type            OCSPResponseCacheType
 	LocalStore      string
-	PreserveRevoked bool
+	Type            OCSPResponseCacheType
 	SaveInterval    float64
+	PreserveRevoked bool
 }
 
 func NewOCSPResponseCacheConfig() *OCSPResponseCacheConfig {
@@ -77,15 +74,13 @@ type OCSPResponseCacheStats struct {
 	Goods     int64 `json:"goods"`
 	Unknowns  int64 `json:"unknowns"`
 }
-
 type OCSPResponseCacheItem struct {
-	Subject     string                  `json:"subject,omitempty"`
 	CachedAt    time.Time               `json:"cached_at"`
-	RespStatus  certidp.StatusAssertion `json:"resp_status"`
 	RespExpires time.Time               `json:"resp_expires,omitempty"`
+	Subject     string                  `json:"subject,omitempty"`
 	Resp        []byte                  `json:"resp"`
+	RespStatus  certidp.StatusAssertion `json:"resp_status"`
 }
-
 type OCSPResponseCache interface {
 	Put(key string, resp *ocsp.Response, subj string, log *certidp.Log)
 	Get(key string, log *certidp.Log) []byte
@@ -102,49 +97,41 @@ type OCSPResponseCache interface {
 type NoOpCache struct {
 	config *OCSPResponseCacheConfig
 	stats  *OCSPResponseCacheStats
-	online bool
 	mu     *sync.RWMutex
+	online bool
 }
 
 func (c *NoOpCache) Put(_ string, _ *ocsp.Response, _ string, _ *certidp.Log) {}
-
 func (c *NoOpCache) Get(_ string, _ *certidp.Log) []byte {
 	return nil
 }
-
 func (c *NoOpCache) Delete(_ string, _ bool, _ *certidp.Log) {}
-
 func (c *NoOpCache) Start(_ *Server) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	c.stats = &OCSPResponseCacheStats{}
 	c.online = true
 }
-
 func (c *NoOpCache) Stop(_ *Server) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	c.online = false
 }
-
 func (c *NoOpCache) Online() bool {
 	c.mu.RLock()
 	defer c.mu.RUnlock()
 	return c.online
 }
-
 func (c *NoOpCache) Type() string {
 	c.mu.RLock()
 	defer c.mu.RUnlock()
 	return "none"
 }
-
 func (c *NoOpCache) Config() *OCSPResponseCacheConfig {
 	c.mu.RLock()
 	defer c.mu.RUnlock()
 	return c.config
 }
-
 func (c *NoOpCache) Stats() *OCSPResponseCacheStats {
 	c.mu.RLock()
 	defer c.mu.RUnlock()
@@ -155,12 +142,12 @@ func (c *NoOpCache) Stats() *OCSPResponseCacheStats {
 type LocalCache struct {
 	config       *OCSPResponseCacheConfig
 	stats        *OCSPResponseCacheStats
-	online       bool
 	cache        map[string]OCSPResponseCacheItem
 	mu           *sync.RWMutex
-	saveInterval time.Duration
-	dirty        bool
 	timer        *time.Timer
+	saveInterval time.Duration
+	online       bool
+	dirty        bool
 }
 
 // Put captures a CA OCSP response to the OCSP peer cache indexed by response fingerprint (a hash)
@@ -220,12 +207,10 @@ func (c *LocalCache) Get(key string, log *certidp.Log) []byte {
 	}
 	return resp
 }
-
 func (c *LocalCache) adjustStatsHitToMiss() {
 	atomic.AddInt64(&c.stats.Misses, 1)
 	atomic.AddInt64(&c.stats.Hits, -1)
 }
-
 func (c *LocalCache) adjustStats(delta int64, rs certidp.StatusAssertion) {
 	if delta == 0 {
 		return
@@ -277,7 +262,6 @@ func (c *LocalCache) Start(s *Server) {
 	c.online = true
 	c.mu.Unlock()
 }
-
 func (c *LocalCache) Stop(s *Server) {
 	c.mu.Lock()
 	s.Debugf(certidp.DbgStoppingCache)
@@ -286,25 +270,21 @@ func (c *LocalCache) Stop(s *Server) {
 	c.mu.Unlock()
 	c.saveCache(s)
 }
-
 func (c *LocalCache) Online() bool {
 	c.mu.RLock()
 	defer c.mu.RUnlock()
 	return c.online
 }
-
 func (c *LocalCache) Type() string {
 	c.mu.RLock()
 	defer c.mu.RUnlock()
 	return "local"
 }
-
 func (c *LocalCache) Config() *OCSPResponseCacheConfig {
 	c.mu.RLock()
 	defer c.mu.RUnlock()
 	return c.config
 }
-
 func (c *LocalCache) Stats() *OCSPResponseCacheStats {
 	c.mu.RLock()
 	defer c.mu.RUnlock()
@@ -321,7 +301,6 @@ func (c *LocalCache) Stats() *OCSPResponseCacheStats {
 	}
 	return &stats
 }
-
 func (c *LocalCache) initStats() {
 	c.mu.Lock()
 	defer c.mu.Unlock()
@@ -340,7 +319,6 @@ func (c *LocalCache) initStats() {
 		}
 	}
 }
-
 func (c *LocalCache) Compress(buf []byte) ([]byte, error) {
 	bodyLen := int64(len(buf))
 	var output bytes.Buffer
@@ -356,7 +334,6 @@ func (c *LocalCache) Compress(buf []byte) ([]byte, error) {
 	}
 	return output.Bytes(), nil
 }
-
 func (c *LocalCache) Decompress(buf []byte) ([]byte, error) {
 	bodyLen := int64(len(buf))
 	input := bytes.NewReader(buf[:bodyLen])
@@ -367,7 +344,6 @@ func (c *LocalCache) Decompress(buf []byte) ([]byte, error) {
 	}
 	return output, reader.Close()
 }
-
 func (c *LocalCache) loadCache(s *Server) {
 	d := s.opts.OCSPCacheConfig.LocalStore
 	if d == _EMPTY_ {
@@ -402,7 +378,6 @@ func (c *LocalCache) loadCache(s *Server) {
 	}
 	c.dirty = false
 }
-
 func (c *LocalCache) saveCache(s *Server) {
 	c.mu.RLock()
 	dirty := c.dirty
@@ -440,7 +415,6 @@ func (c *LocalCache) saveCache(s *Server) {
 		tmp.Close()
 		os.Remove(tmp.Name())
 	}() // clean up any temp files
-
 	// RW lock here because we're going to snapshot the cache to disk and mark as clean if successful
 	c.mu.Lock()
 	defer c.mu.Unlock()
@@ -542,7 +516,6 @@ func (s *Server) initOCSPResponseCache() {
 		s.Fatalf(certidp.ErrBadCacheTypeConfig, cc.Type)
 	}
 }
-
 func (s *Server) startOCSPResponseCache() {
 	// No mTLS OCSP or Leaf OCSP enablements, so no need to start cache
 	s.mu.RLock()
@@ -551,7 +524,6 @@ func (s *Server) startOCSPResponseCache() {
 		return
 	}
 	s.mu.RUnlock()
-
 	// Could be heavier operation depending on cache implementation
 	s.ocsprc.Start(s)
 	if s.ocsprc.Online() {
@@ -560,7 +532,6 @@ func (s *Server) startOCSPResponseCache() {
 		s.Noticef(certidp.MsgCacheOffline, s.ocsprc.Type())
 	}
 }
-
 func (s *Server) stopOCSPResponseCache() {
 	s.mu.RLock()
 	if s.ocsprc == nil {
@@ -570,7 +541,6 @@ func (s *Server) stopOCSPResponseCache() {
 	s.mu.RUnlock()
 	s.ocsprc.Stop(s)
 }
-
 func parseOCSPResponseCache(v any) (pcfg *OCSPResponseCacheConfig, retError error) {
 	var lt token
 	defer convertPanicToError(&lt, &retError)

@@ -10,14 +10,12 @@
 // WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 // See the License for the specific language governing permissions and
 // limitations under the License.
-
 package testhelper
 
 // These routines need to be accessible in both the server and test
 // directories, and tests importing a package don't get exported symbols from
 // _test.go files in the imported package, so we put them here where they can
 // be used freely.
-
 import (
 	"fmt"
 	"strings"
@@ -26,9 +24,9 @@ import (
 )
 
 type DummyLogger struct {
-	sync.Mutex
 	Msg     string
 	AllMsgs []string
+	sync.Mutex
 }
 
 func (l *DummyLogger) CheckContent(t *testing.T, expectedStr string) {
@@ -39,13 +37,11 @@ func (l *DummyLogger) CheckContent(t *testing.T, expectedStr string) {
 		t.Fatalf("Expected log to be: %v, got %v", expectedStr, l.Msg)
 	}
 }
-
 func (l *DummyLogger) aggregate() {
 	if l.AllMsgs != nil {
 		l.AllMsgs = append(l.AllMsgs, l.Msg)
 	}
 }
-
 func (l *DummyLogger) Noticef(format string, v ...any) {
 	l.Lock()
 	defer l.Unlock()
@@ -93,7 +89,6 @@ func NewDummyLogger(retain uint) *DummyLogger {
 	}
 	return l
 }
-
 func (l *DummyLogger) Drain() {
 	l.Lock()
 	defer l.Unlock()
@@ -102,16 +97,13 @@ func (l *DummyLogger) Drain() {
 	}
 	l.AllMsgs = make([]string, 0, len(l.AllMsgs))
 }
-
 func (l *DummyLogger) CheckForProhibited(t *testing.T, reason, needle string) {
 	t.Helper()
 	l.Lock()
 	defer l.Unlock()
-
 	if l.AllMsgs == nil {
 		t.Fatal("DummyLogger.CheckForProhibited called without AllMsgs being collected")
 	}
-
 	// Collect _all_ matches, rather than have to re-test repeatedly.
 	// This will particularly help with less deterministic tests with multiple matches.
 	shouldFail := false

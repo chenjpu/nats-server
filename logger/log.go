@@ -10,7 +10,6 @@
 // WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 // See the License for the specific language governing permissions and
 // limitations under the License.
-
 // Package logger provides logging facilities for the NATS server
 package logger
 
@@ -27,19 +26,18 @@ import (
 
 // Logger is the server logger
 type Logger struct {
-	sync.Mutex
 	logger     *log.Logger
-	debug      bool
-	trace      bool
+	fl         *fileLogger
 	infoLabel  string
 	warnLabel  string
 	errorLabel string
 	fatalLabel string
 	debugLabel string
 	traceLabel string
-	fl         *fileLogger
+	sync.Mutex
+	debug bool
+	trace bool
 }
-
 type LogOption interface {
 	isLoggerOption()
 }
@@ -48,13 +46,11 @@ type LogOption interface {
 type LogUTC bool
 
 func (l LogUTC) isLoggerOption() {}
-
 func logFlags(time bool, opts ...LogOption) int {
 	flags := 0
 	if time {
 		flags = log.LstdFlags | log.Lmicroseconds
 	}
-
 	for _, opt := range opts {
 		switch v := opt.(type) {
 		case LogUTC:
@@ -63,49 +59,41 @@ func logFlags(time bool, opts ...LogOption) int {
 			}
 		}
 	}
-
 	return flags
 }
 
 // NewStdLogger creates a logger with output directed to Stderr
 func NewStdLogger(time, debug, trace, colors, pid bool, opts ...LogOption) *Logger {
 	flags := logFlags(time, opts...)
-
 	pre := ""
 	if pid {
 		pre = pidPrefix()
 	}
-
 	l := &Logger{
 		logger: log.New(os.Stderr, pre, flags),
 		debug:  debug,
 		trace:  trace,
 	}
-
 	if colors {
 		setColoredLabelFormats(l)
 	} else {
 		setPlainLabelFormats(l)
 	}
-
 	return l
 }
 
 // NewFileLogger creates a logger with output directed to a file
 func NewFileLogger(filename string, time, debug, trace, pid bool, opts ...LogOption) *Logger {
 	flags := logFlags(time, opts...)
-
 	pre := ""
 	if pid {
 		pre = pidPrefix()
 	}
-
 	fl, err := newFileLogger(filename, pre, time)
 	if err != nil {
 		log.Fatalf("error opening file: %v", err)
 		return nil
 	}
-
 	l := &Logger{
 		logger: log.New(fl, pre, flags),
 		debug:  debug,
@@ -115,7 +103,6 @@ func NewFileLogger(filename string, time, debug, trace, pid bool, opts ...LogOpt
 	fl.Lock()
 	fl.l = l
 	fl.Unlock()
-
 	setPlainLabelFormats(l)
 	return l
 }
@@ -125,19 +112,18 @@ type writerAndCloser interface {
 	Close() error
 	Name() string
 }
-
 type fileLogger struct {
-	out       int64
-	canRotate int32
-	sync.Mutex
-	l           *Logger
 	f           writerAndCloser
+	l           *Logger
+	pid         string
+	out         int64
 	limit       int64
 	olimit      int64
-	pid         string
-	time        bool
-	closed      bool
 	maxNumFiles int
+	sync.Mutex
+	canRotate int32
+	time      bool
+	closed    bool
 }
 
 func newFileLogger(filename, pidPrefix string, time bool) (*fileLogger, error) {
@@ -160,7 +146,6 @@ func newFileLogger(filename, pidPrefix string, time bool) (*fileLogger, error) {
 	}
 	return fl, nil
 }
-
 func (l *fileLogger) setLimit(limit int64) {
 	l.Lock()
 	l.olimit, l.limit = limit, limit
@@ -171,13 +156,11 @@ func (l *fileLogger) setLimit(limit int64) {
 		l.l.Noticef("Rotating logfile...")
 	}
 }
-
 func (l *fileLogger) setMaxNumFiles(max int) {
 	l.Lock()
 	l.maxNumFiles = max
 	l.Unlock()
 }
-
 func (l *fileLogger) logDirect(label, format string, v ...any) int {
 	var entrya = [256]byte{}
 	var entry = entrya[:0]
@@ -198,7 +181,6 @@ func (l *fileLogger) logDirect(label, format string, v ...any) int {
 	l.f.Write(entry)
 	return len(entry)
 }
-
 func (l *fileLogger) logPurge(fname string) {
 	var backups []string
 	lDir := filepath.Dir(fname)
@@ -233,7 +215,6 @@ func (l *fileLogger) logPurge(fname string) {
 		}
 	}
 }
-
 func (l *fileLogger) Write(b []byte) (int, error) {
 	if atomic.LoadInt32(&l.canRotate) == 0 {
 		n, err := l.f.Write(b)
@@ -277,7 +258,6 @@ func (l *fileLogger) Write(b []byte) (int, error) {
 	l.Unlock()
 	return n, err
 }
-
 func (l *fileLogger) close() error {
 	l.Lock()
 	if l.closed {
@@ -347,7 +327,6 @@ func (l *Logger) Close() error {
 func pidPrefix() string {
 	return fmt.Sprintf("[%d] ", os.Getpid())
 }
-
 func setPlainLabelFormats(l *Logger) {
 	l.infoLabel = "[INF] "
 	l.debugLabel = "[DBG] "
@@ -356,7 +335,6 @@ func setPlainLabelFormats(l *Logger) {
 	l.fatalLabel = "[FTL] "
 	l.traceLabel = "[TRC] "
 }
-
 func setColoredLabelFormats(l *Logger) {
 	colorFormat := "[\x1b[%sm%s\x1b[0m] "
 	l.infoLabel = fmt.Sprintf(colorFormat, "32", "INF")

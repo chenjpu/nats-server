@@ -10,7 +10,6 @@
 // WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 // See the License for the specific language governing permissions and
 // limitations under the License.
-
 package server
 
 import (
@@ -23,18 +22,18 @@ import (
 
 type parserState int
 type parseState struct {
-	state   parserState
-	op      byte
-	as      int
-	drop    int
 	pa      pubArg
+	header  http.Header // access via getHeader
 	argBuf  []byte
 	msgBuf  []byte
-	header  http.Header // access via getHeader
+	state   parserState
+	as      int
+	drop    int
 	scratch [MAX_CONTROL_LINE_SIZE]byte
+	op      byte
 }
-
 type pubArg struct {
+	trace   *msgTrace
 	arg     []byte
 	pacache []byte
 	origin  []byte
@@ -46,10 +45,9 @@ type pubArg struct {
 	szb     []byte
 	hdb     []byte
 	queues  [][]byte
+	psi     []*serviceImport
 	size    int
 	hdr     int
-	psi     []*serviceImport
-	trace   *msgTrace
 }
 
 // Parser constants
@@ -141,7 +139,6 @@ func (c *client) parse(buf []byte) error {
 	var i int
 	var b byte
 	var lmsg bool
-
 	// Snapshots
 	c.mu.Lock()
 	// Snapshot and then reset when we receive a
@@ -150,11 +147,9 @@ func (c *client) parse(buf []byte) error {
 	// Snapshot max control line as well.
 	s, mcl, trace := c.srv, c.mcl, c.trace
 	c.mu.Unlock()
-
 	// Move to loop instead of range syntax to allow jumping of i
 	for i = 0; i < len(buf); i++ {
 		b = buf[i]
-
 		switch c.state {
 		case OP_START:
 			c.op = b
@@ -293,7 +288,6 @@ func (c *client) parse(buf []byte) error {
 				if err := c.processHeaderPub(arg, remaining); err != nil {
 					return err
 				}
-
 				c.drop, c.as, c.state = 0, i+1, MSG_PAYLOAD
 				// If we don't have a saved buffer then jump ahead with
 				// the index. If this overruns what is left we fall out
@@ -367,7 +361,6 @@ func (c *client) parse(buf []byte) error {
 					return err
 				}
 				c.drop, c.as, c.state = 0, i+1, MSG_PAYLOAD
-
 				// jump ahead with the index. If this overruns
 				// what is left we fall out and process split
 				// buffer.
@@ -432,7 +425,6 @@ func (c *client) parse(buf []byte) error {
 				if err := c.processPub(arg); err != nil {
 					return err
 				}
-
 				c.drop, c.as, c.state = 0, i+1, MSG_PAYLOAD
 				// If we don't have a saved buffer then jump ahead with
 				// the index. If this overruns what is left we fall out
@@ -487,7 +479,6 @@ func (c *client) parse(buf []byte) error {
 			} else {
 				c.msgBuf = buf[c.as : i+1]
 			}
-
 			var mt *msgTrace
 			if c.pa.hdr > 0 {
 				mt = c.initMsgTrace()
@@ -506,9 +497,7 @@ func (c *client) parse(buf []byte) error {
 			if trace {
 				c.traceMsg(c.msgBuf)
 			}
-
 			c.processInboundMsg(c.msgBuf)
-
 			mt.sendEvent()
 			c.argBuf, c.msgBuf, c.header = nil, nil, nil
 			c.drop, c.as, c.state = 0, i+1, OP_START
@@ -653,7 +642,6 @@ func (c *client) parse(buf []byte) error {
 					return err
 				}
 				var err error
-
 				switch c.kind {
 				case CLIENT:
 					if trace {
@@ -788,7 +776,6 @@ func (c *client) parse(buf []byte) error {
 					return err
 				}
 				var err error
-
 				switch c.kind {
 				case CLIENT:
 					if trace {
@@ -1022,7 +1009,6 @@ func (c *client) parse(buf []byte) error {
 					return err
 				}
 				c.drop, c.as, c.state = 0, i+1, MSG_PAYLOAD
-
 				// jump ahead with the index. If this overruns
 				// what is left we fall out and process split
 				// buffer.
@@ -1166,14 +1152,12 @@ func (c *client) parse(buf []byte) error {
 			goto parseErr
 		}
 	}
-
 	// Check for split buffer scenarios for any ARG state.
 	if c.state == SUB_ARG || c.state == UNSUB_ARG ||
 		c.state == PUB_ARG || c.state == HPUB_ARG ||
 		c.state == ASUB_ARG || c.state == AUSUB_ARG ||
 		c.state == MSG_ARG || c.state == HMSG_ARG ||
 		c.state == MINUS_ERR_ARG || c.state == CONNECT_ARG || c.state == INFO_ARG {
-
 		// Setup a holder buffer to deal with split buffer scenario.
 		if c.argBuf == nil {
 			c.argBuf = c.scratch[:0]
@@ -1186,19 +1170,16 @@ func (c *client) parse(buf []byte) error {
 			return err
 		}
 	}
-
 	// Check for split msg
 	if (c.state == MSG_PAYLOAD || c.state == MSG_END_R || c.state == MSG_END_N) && c.msgBuf == nil {
 		// We need to clone the pubArg if it is still referencing the
 		// read buffer and we are not able to process the msg.
-
 		if c.argBuf == nil {
 			// Works also for MSG_ARG, when message comes from ROUTE or GATEWAY.
 			if err := c.clonePubArg(lmsg); err != nil {
 				goto parseErr
 			}
 		}
-
 		// If we will overflow the scratch buffer, just create a
 		// new buffer to hold the split message.
 		if c.pa.size > cap(c.scratch)-len(c.argBuf) {
@@ -1216,20 +1197,16 @@ func (c *client) parse(buf []byte) error {
 			c.msgBuf = append(c.msgBuf, (buf[c.as:])...)
 		}
 	}
-
 	return nil
-
 authErr:
 	c.authViolation()
 	return ErrAuthentication
-
 parseErr:
 	c.sendErr("Unknown Protocol Operation")
 	snip := protoSnippet(i, PROTO_SNIPPET_SIZE, buf)
 	err := fmt.Errorf("%s parser ERROR, state=%d, i=%d: proto='%s...'", c.kindString(), c.state, i, snip)
 	return err
 }
-
 func protoSnippet(start, max int, buf []byte) string {
 	stop := start + max
 	bufSize := len(buf)
@@ -1265,7 +1242,6 @@ func (c *client) clonePubArg(lmsg bool) error {
 	// Just copy and re-process original arg buffer.
 	c.argBuf = c.scratch[:0]
 	c.argBuf = append(c.argBuf, c.pa.arg...)
-
 	switch c.kind {
 	case ROUTER, GATEWAY:
 		if lmsg {
@@ -1290,7 +1266,6 @@ func (c *client) clonePubArg(lmsg bool) error {
 		}
 	}
 }
-
 func (ps *parseState) getHeader() http.Header {
 	if ps.header == nil {
 		if hdr := ps.pa.hdr; hdr > 0 {

@@ -10,7 +10,6 @@
 // WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 // See the License for the specific language governing permissions and
 // limitations under the License.
-
 package server
 
 import (
@@ -24,11 +23,10 @@ type outMsg struct {
 	hdr  []byte
 	msg  []byte
 }
-
 type sendq struct {
-	mu sync.Mutex
 	q  *ipQueue[*outMsg]
 	s  *Server
+	mu sync.Mutex
 }
 
 func (s *Server) newSendQ() *sendq {
@@ -36,20 +34,15 @@ func (s *Server) newSendQ() *sendq {
 	s.startGoRoutine(sq.internalLoop)
 	return sq
 }
-
 func (sq *sendq) internalLoop() {
 	sq.mu.Lock()
 	s, q := sq.s, sq.q
 	sq.mu.Unlock()
-
 	defer s.grWG.Done()
-
 	c := s.createInternalSystemClient()
 	c.registerWithAccount(s.SystemAccount())
 	c.noIcb = true
-
 	defer c.closeConnection(ClientClosed)
-
 	// To optimize for not converting a string to a []byte slice.
 	var (
 		subj [256]byte
@@ -57,7 +50,6 @@ func (sq *sendq) internalLoop() {
 		szb  [10]byte
 		hdb  [10]byte
 	)
-
 	for s.isRunning() {
 		select {
 		case <-s.quitCh:
@@ -108,7 +100,6 @@ func (sq *sendq) send(subj, rply string, hdr, msg []byte) {
 	out := outMsgPool.Get().(*outMsg)
 	out.subj, out.rply = subj, rply
 	out.hdr, out.msg = nil, nil
-
 	// We will copy these for now.
 	if len(hdr) > 0 {
 		hdr = copyBytes(hdr)

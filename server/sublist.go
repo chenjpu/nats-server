@@ -10,7 +10,6 @@
 // WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 // See the License for the specific language governing permissions and
 // limitations under the License.
-
 package server
 
 import (
@@ -26,7 +25,6 @@ import (
 // provides a facility to match subjects from published messages to
 // interested subscribers. Subscribers can have wildcard subjects to
 // match multiple published subjects.
-
 // Common byte variables for wildcards and token separator.
 const (
 	pwc   = '*'
@@ -62,17 +60,17 @@ type SublistResult struct {
 
 // A Sublist stores and efficiently retrieves subscriptions.
 type Sublist struct {
-	sync.RWMutex
+	root      *level
+	cache     map[string]*SublistResult
+	notify    *notifyMaps
 	genid     uint64
 	matches   uint64
 	cacheHits uint64
 	inserts   uint64
 	removes   uint64
-	root      *level
-	cache     map[string]*SublistResult
-	ccSweep   int32
-	notify    *notifyMaps
-	count     uint32
+	sync.RWMutex
+	ccSweep int32
+	count   uint32
 }
 
 // notifyMaps holds maps of arrays of channels for notifications
@@ -111,7 +109,6 @@ func newLevel() *level {
 // interest changes are high, suppressing the cache can help.
 // https://github.com/nats-io/nats-server/issues/941
 // FIXME(dlc) - should be more dynamic at some point based on cache thrashing.
-
 // NewSublist will create a default sublist with caching enabled per the flag.
 func NewSublist(enableCache bool) *Sublist {
 	if enableCache {
@@ -148,11 +145,9 @@ func (s *Sublist) CacheEnabled() bool {
 func (s *Sublist) RegisterNotification(subject string, notify chan<- bool) error {
 	return s.registerNotification(subject, _EMPTY_, notify)
 }
-
 func (s *Sublist) RegisterQueueNotification(subject, queue string, notify chan<- bool) error {
 	return s.registerNotification(subject, queue, notify)
 }
-
 func (s *Sublist) registerNotification(subject, queue string, notify chan<- bool) error {
 	if subjectHasWildcard(subject) {
 		return ErrInvalidSubject
@@ -160,10 +155,8 @@ func (s *Sublist) registerNotification(subject, queue string, notify chan<- bool
 	if notify == nil {
 		return ErrNilChan
 	}
-
 	var hasInterest bool
 	r := s.Match(subject)
-
 	if len(r.psubs)+len(r.qsubs) > 0 {
 		if queue == _EMPTY_ {
 			for _, sub := range r.psubs {
@@ -182,10 +175,8 @@ func (s *Sublist) registerNotification(subject, queue string, notify chan<- bool
 			}
 		}
 	}
-
 	key := keyFromSubjectAndQueue(subject, queue)
 	var err error
-
 	s.Lock()
 	if s.notify == nil {
 		s.notify = &notifyMaps{
@@ -200,7 +191,6 @@ func (s *Sublist) registerNotification(subject, queue string, notify chan<- bool
 		err = s.addInsertNotify(key, notify)
 	}
 	s.Unlock()
-
 	if err == nil {
 		sendNotification(notify, hasInterest)
 	}
@@ -222,15 +212,12 @@ func chkAndRemove(key string, notify chan<- bool, ms map[string][]chan<- bool) b
 	}
 	return false
 }
-
 func (s *Sublist) ClearNotification(subject string, notify chan<- bool) bool {
 	return s.clearNotification(subject, _EMPTY_, notify)
 }
-
 func (s *Sublist) ClearQueueNotification(subject, queue string, notify chan<- bool) bool {
 	return s.clearNotification(subject, queue, notify)
 }
-
 func (s *Sublist) clearNotification(subject, queue string, notify chan<- bool) bool {
 	s.Lock()
 	if s.notify == nil {
@@ -248,7 +235,6 @@ func (s *Sublist) clearNotification(subject, queue string, notify chan<- bool) b
 	s.Unlock()
 	return didRemove
 }
-
 func sendNotification(ch chan<- bool, hasInterest bool) {
 	select {
 	case ch <- hasInterest:
@@ -280,7 +266,6 @@ func (s *Sublist) addNotify(m map[string][]chan<- bool, subject string, notify c
 			}
 		}
 	}
-
 	m[subject] = append(chs, notify)
 	return nil
 }
@@ -301,7 +286,6 @@ func keyFromSubjectAndQueue(subject, queue string) string {
 // Write lock should be held.
 func (s *Sublist) chkForInsertNotification(subject, queue string) {
 	key := keyFromSubjectAndQueue(subject, queue)
-
 	// All notify subjects are also literal so just do a hash lookup here.
 	if chs := s.notify.insert[key]; len(chs) > 0 {
 		for _, ch := range chs {
@@ -321,7 +305,6 @@ func (s *Sublist) chkForRemoveNotification(subject, queue string) {
 		// We need to always check that we have no interest anymore.
 		var hasInterest bool
 		r := s.matchNoLock(subject)
-
 		if len(r.psubs)+len(r.qsubs) > 0 {
 			if queue == _EMPTY_ {
 				for _, sub := range r.psubs {
@@ -365,20 +348,16 @@ func (s *Sublist) Insert(sub *subscription) error {
 		}
 	}
 	tokens = append(tokens, subject[start:])
-
 	s.Lock()
-
 	var sfwc, haswc, isnew bool
 	var n *node
 	l := s.root
-
 	for _, t := range tokens {
 		lt := len(t)
 		if lt == 0 || sfwc {
 			s.Unlock()
 			return ErrInvalidSubject
 		}
-
 		if lt > 1 {
 			n = l.nodes[t]
 		} else {
@@ -439,18 +418,14 @@ func (s *Sublist) Insert(sub *subscription) error {
 		}
 		subs[sub] = struct{}{}
 	}
-
 	s.count++
 	s.inserts++
-
 	s.addToCache(subject, sub)
 	atomic.AddUint64(&s.genid, 1)
-
 	if s.notify != nil && isnew && !haswc && len(s.notify.insert) > 0 {
 		s.chkForInsertNotification(subject, string(sub.queue))
 	}
 	s.Unlock()
-
 	return nil
 }
 
@@ -541,14 +516,11 @@ func (s *Sublist) MatchBytes(subject []byte) *SublistResult {
 func (s *Sublist) HasInterest(subject string) bool {
 	return s.hasInterest(subject, true)
 }
-
 func (s *Sublist) matchNoLock(subject string) *SublistResult {
 	return s.match(subject, false, false)
 }
-
 func (s *Sublist) match(subject string, doLock bool, doCopyOnCache bool) *SublistResult {
 	atomic.AddUint64(&s.matches, 1)
-
 	// Check cache first.
 	if doLock {
 		s.RLock()
@@ -562,7 +534,6 @@ func (s *Sublist) match(subject string, doLock bool, doCopyOnCache bool) *Sublis
 		atomic.AddUint64(&s.cacheHits, 1)
 		return r
 	}
-
 	tsa := [32]string{}
 	tokens := tsa[:0]
 	start := 0
@@ -579,14 +550,11 @@ func (s *Sublist) match(subject string, doLock bool, doCopyOnCache bool) *Sublis
 		return emptyResult
 	}
 	tokens = append(tokens, subject[start:])
-
 	// FIXME(dlc) - Make shared pool between sublist and client readLoop?
 	result := &SublistResult{}
-
 	// Get result from the main structure and place into the shared cache.
 	// Hold the read lock to avoid race between match and store.
 	var n int
-
 	if doLock {
 		if cacheEnabled {
 			s.Lock()
@@ -594,7 +562,6 @@ func (s *Sublist) match(subject string, doLock bool, doCopyOnCache bool) *Sublis
 			s.RLock()
 		}
 	}
-
 	matchLevel(s.root, tokens, result)
 	// Check for empty result.
 	if len(result.psubs) == 0 && len(result.qsubs) == 0 {
@@ -614,15 +581,12 @@ func (s *Sublist) match(subject string, doLock bool, doCopyOnCache bool) *Sublis
 			s.RUnlock()
 		}
 	}
-
 	// Reduce the cache count if we have exceeded our set maximum.
 	if cacheEnabled && n > slCacheMax && atomic.CompareAndSwapInt32(&s.ccSweep, 0, 1) {
 		go s.reduceCacheCount()
 	}
-
 	return result
 }
-
 func (s *Sublist) hasInterest(subject string, doLock bool) bool {
 	// Check cache first.
 	if doLock {
@@ -641,7 +605,6 @@ func (s *Sublist) hasInterest(subject string, doLock bool) bool {
 		atomic.AddUint64(&s.cacheHits, 1)
 		return true
 	}
-
 	tsa := [32]string{}
 	tokens := tsa[:0]
 	start := 0
@@ -658,7 +621,6 @@ func (s *Sublist) hasInterest(subject string, doLock bool) bool {
 		return false
 	}
 	tokens = append(tokens, subject[start:])
-
 	if doLock {
 		s.RLock()
 		defer s.RUnlock()
@@ -777,7 +739,6 @@ func matchLevel(l *level, toks []string, results *SublistResult) {
 		addNodeToResults(pwc, results)
 	}
 }
-
 func matchLevelForAny(l *level, toks []string) bool {
 	var pwc, n *node
 	for i, t := range toks {
@@ -828,20 +789,16 @@ func (s *Sublist) remove(sub *subscription, shouldLock bool, doCacheUpdates bool
 		}
 	}
 	tokens = append(tokens, subject[start:])
-
 	if shouldLock {
 		s.Lock()
 		defer s.Unlock()
 	}
-
 	var sfwc, haswc bool
 	var n *node
 	l := s.root
-
 	// Track levels for pruning
 	var lnts [32]lnt
 	levels := lnts[:0]
-
 	for _, t := range tokens {
 		lt := len(t)
 		if lt == 0 || sfwc {
@@ -875,10 +832,8 @@ func (s *Sublist) remove(sub *subscription, shouldLock bool, doCacheUpdates bool
 	if !removed {
 		return ErrNotFound
 	}
-
 	s.count--
 	s.removes++
-
 	for i := len(levels) - 1; i >= 0; i-- {
 		l, n, t := levels[i].l, levels[i].n, levels[i].t
 		if n.isEmpty() {
@@ -889,11 +844,9 @@ func (s *Sublist) remove(sub *subscription, shouldLock bool, doCacheUpdates bool
 		s.removeFromCache(subject)
 		atomic.AddUint64(&s.genid, 1)
 	}
-
 	if s.notify != nil && last && !haswc && len(s.notify.remove) > 0 {
 		s.chkForRemoveNotification(subject, string(sub.queue))
 	}
-
 	return nil
 }
 
@@ -907,14 +860,11 @@ func (s *Sublist) RemoveBatch(subs []*subscription) error {
 	if len(subs) == 0 {
 		return nil
 	}
-
 	s.Lock()
 	defer s.Unlock()
-
 	// TODO(dlc) - We could try to be smarter here for a client going away but the account
 	// has a large number of subscriptions compared to this client. Quick and dirty testing
 	// though said just disabling all the time best for now.
-
 	// Turn off our cache if enabled.
 	wasEnabled := s.cache != nil
 	s.cache = nil
@@ -988,7 +938,6 @@ func (s *Sublist) removeFromNode(n *node, sub *subscription) (found, last bool) 
 		}
 		return found, len(n.psubs) == 0
 	}
-
 	// We have a queue group subscription here
 	qsub := n.qsubs[string(sub.queue)]
 	_, found = qsub[sub]
@@ -1042,7 +991,6 @@ func (s *SublistStats) add(stat *SublistStats) {
 	if s.MaxFanout < stat.MaxFanout {
 		s.MaxFanout = stat.MaxFanout
 	}
-
 	// ignore slStats.AvgFanout, collect the values
 	// it's based on instead
 	s.totFanout += stat.totFanout
@@ -1058,7 +1006,6 @@ func (s *SublistStats) add(stat *SublistStats) {
 // Stats will return a stats structure for the current state.
 func (s *Sublist) Stats() *SublistStats {
 	st := &SublistStats{}
-
 	s.RLock()
 	cache := s.cache
 	cc := len(s.cache)
@@ -1066,14 +1013,12 @@ func (s *Sublist) Stats() *SublistStats {
 	st.NumInserts = s.inserts
 	st.NumRemoves = s.removes
 	s.RUnlock()
-
 	st.NumCache = uint32(cc)
 	st.NumMatches = atomic.LoadUint64(&s.matches)
 	st.cacheHits = atomic.LoadUint64(&s.cacheHits)
 	if st.NumMatches > 0 {
 		st.CacheHitRate = float64(st.cacheHits) / float64(st.NumMatches)
 	}
-
 	// whip through cache for fanout stats, this can be off if cache is full and doing evictions.
 	// If this is called frequently, which it should not be, this could hurt performance.
 	if cache != nil {
@@ -1110,10 +1055,8 @@ func visitLevel(l *level, depth int) int {
 	if l == nil || l.numNodes() == 0 {
 		return depth
 	}
-
 	depth++
 	maxDepth := depth
-
 	for _, n := range l.nodes {
 		if n == nil {
 			continue
@@ -1175,7 +1118,6 @@ func IsValidPublishSubject(subject string) bool {
 func IsValidSubject(subject string) bool {
 	return isValidSubject(subject, false)
 }
-
 func isValidSubject(subject string, checkRunes bool) bool {
 	if subject == _EMPTY_ {
 		return false
@@ -1246,7 +1188,6 @@ func ValidateMapping(src string, dest string) error {
 		if length == 0 || sfwc {
 			return &mappingDestinationErr{t, ErrInvalidMappingDestinationSubject}
 		}
-
 		// if it looks like it contains a mapping function, it should be a valid mapping function
 		if length > 4 && t[0] == '{' && t[1] == '{' && t[length-2] == '}' && t[length-1] == '}' {
 			if !partitionMappingFunctionRegEx.MatchString(t) &&
@@ -1261,14 +1202,12 @@ func ValidateMapping(src string, dest string) error {
 				continue
 			}
 		}
-
 		if length == 1 && t[0] == fwc {
 			sfwc = true
 		} else if strings.ContainsAny(t, "\t\n\f\r ") {
 			return ErrInvalidMappingDestinationSubject
 		}
 	}
-
 	// Finally, verify that the transform can actually be created from the source and destination
 	_, err := NewSubjectTransform(src, dest)
 	return err
@@ -1333,12 +1272,10 @@ func SubjectsCollide(subj1, subj2 string) bool {
 			return false
 		}
 	}
-
 	stop := len(toks1)
 	if len(toks2) < stop {
 		stop = len(toks2)
 	}
-
 	// We look for reasons to say no.
 	for i := 0; i < stop; i++ {
 		t1, t2 := toks1[i], toks2[i]
@@ -1346,7 +1283,6 @@ func SubjectsCollide(subj1, subj2 string) bool {
 			return false
 		}
 	}
-
 	return true
 }
 
@@ -1429,12 +1365,10 @@ func isSubsetMatchTokenized(tokens, test []string) bool {
 			return true
 		}
 		t1 := tokens[i]
-
 		l = len(t1)
 		if l == 0 || t1[0] == fwc && l == 1 {
 			return false
 		}
-
 		if t1[0] == pwc && len(t1) == 1 {
 			m := t2[0] == pwc && len(t2) == 1
 			if !m {
@@ -1522,7 +1456,6 @@ func matchLiteral(literal, subject string) bool {
 	// Make sure we have processed all of the literal's chars..
 	return li >= ll
 }
-
 func addLocalSub(sub *subscription, subs *[]*subscription, includeLeafHubs bool) {
 	if sub != nil && sub.client != nil {
 		kind := sub.client.kind
@@ -1532,7 +1465,6 @@ func addLocalSub(sub *subscription, subs *[]*subscription, includeLeafHubs bool)
 		}
 	}
 }
-
 func (s *Sublist) addNodeToSubs(n *node, subs *[]*subscription, includeLeafHubs bool) {
 	// Normal subscriptions
 	if n.plist != nil {
@@ -1551,7 +1483,6 @@ func (s *Sublist) addNodeToSubs(n *node, subs *[]*subscription, includeLeafHubs 
 		}
 	}
 }
-
 func (s *Sublist) collectLocalSubs(l *level, subs *[]*subscription, includeLeafHubs bool) {
 	for _, n := range l.nodes {
 		s.addNodeToSubs(n, subs, includeLeafHubs)
@@ -1580,7 +1511,6 @@ func (s *Sublist) All(subs *[]*subscription) {
 	s.collectAllSubs(s.root, subs)
 	s.RUnlock()
 }
-
 func (s *Sublist) addAllNodeToSubs(n *node, subs *[]*subscription) {
 	// Normal subscriptions
 	if n.plist != nil {
@@ -1597,7 +1527,6 @@ func (s *Sublist) addAllNodeToSubs(n *node, subs *[]*subscription) {
 		}
 	}
 }
-
 func (s *Sublist) collectAllSubs(l *level, subs *[]*subscription) {
 	for _, n := range l.nodes {
 		s.addAllNodeToSubs(n, subs)
@@ -1631,9 +1560,7 @@ func (s *Sublist) ReverseMatch(subject string) *SublistResult {
 		}
 	}
 	tokens = append(tokens, subject[start:])
-
 	result := &SublistResult{}
-
 	s.RLock()
 	reverseMatchLevel(s.root, tokens, nil, result)
 	// Check for empty result.
@@ -1641,10 +1568,8 @@ func (s *Sublist) ReverseMatch(subject string) *SublistResult {
 		result = emptyResult
 	}
 	s.RUnlock()
-
 	return result
 }
-
 func reverseMatchLevel(l *level, toks []string, n *node, results *SublistResult) {
 	if l == nil {
 		return
@@ -1684,7 +1609,6 @@ func reverseMatchLevel(l *level, toks []string, n *node, results *SublistResult)
 		addNodeToResults(n, results)
 	}
 }
-
 func getAllNodes(l *level, results *SublistResult) {
 	if l == nil {
 		return

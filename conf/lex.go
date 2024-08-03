@@ -10,20 +10,19 @@
 // WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 // See the License for the specific language governing permissions and
 // limitations under the License.
-
 // Customized heavily from
 // https://github.com/BurntSushi/toml/blob/master/lex.go, which is based on
 // Rob Pike's talk: http://cuddle.googlecode.com/hg/talk/lex.html
-
 // The format supported is less restrictive than today's formats.
 // Supports mixed Arrays [], nested Maps {}, multiple comment types (# and //)
 // Also supports key value assignments using '=' or ':' or whiteSpace()
-//   e.g. foo = 2, foo : 2, foo 2
+//
+//	e.g. foo = 2, foo : 2, foo 2
+//
 // maps can be assigned with no key separator as well
 // semicolons as value terminators in key/value assignments are optional
 //
 // see lex_test.go for more examples.
-
 package conf
 
 import (
@@ -55,7 +54,6 @@ const (
 	itemVariable
 	itemInclude
 )
-
 const (
 	eof               = 0
 	mapStart          = '{'
@@ -82,37 +80,31 @@ const (
 )
 
 type stateFn func(lx *lexer) stateFn
-
 type lexer struct {
-	input string
-	start int
-	pos   int
-	width int
-	line  int
-	state stateFn
-	items chan item
-
+	state         stateFn
+	items         chan item
+	stringStateFn stateFn
+	input         string
 	// A stack of state functions used to maintain context.
 	// The idea is to reuse parts of the state machine in various places.
 	// For example, values can appear at the top level or within arbitrarily
 	// nested arrays. The last state on the stack is used after a value has
 	// been lexed. Similarly for comments.
 	stack []stateFn
-
 	// Used for processing escapable substrings in double-quoted and raw strings
-	stringParts   []string
-	stringStateFn stateFn
-
+	stringParts []string
+	start       int
+	pos         int
+	width       int
+	line        int
 	// lstart is the start position of the current line.
 	lstart int
-
 	// ilstart is the start position of the line from the current item.
 	ilstart int
 }
-
 type item struct {
-	typ  itemType
 	val  string
+	typ  itemType
 	line int
 	pos  int
 }
@@ -127,7 +119,6 @@ func (lx *lexer) nextItem() item {
 		}
 	}
 }
-
 func lex(input string) *lexer {
 	lx := &lexer{
 		input:       input,
@@ -139,11 +130,9 @@ func lex(input string) *lexer {
 	}
 	return lx
 }
-
 func (lx *lexer) push(state stateFn) {
 	lx.stack = append(lx.stack, state)
 }
-
 func (lx *lexer) pop() stateFn {
 	if len(lx.stack) == 0 {
 		return lx.errorf("BUG in lexer: no states to pop.")
@@ -153,7 +142,6 @@ func (lx *lexer) pop() stateFn {
 	lx.stack = lx.stack[0:li]
 	return last
 }
-
 func (lx *lexer) emit(typ itemType) {
 	val := strings.Join(lx.stringParts, "") + lx.input[lx.start:lx.pos]
 	// Position of item in line where it started.
@@ -162,7 +150,6 @@ func (lx *lexer) emit(typ itemType) {
 	lx.start = lx.pos
 	lx.ilstart = lx.lstart
 }
-
 func (lx *lexer) emitString() {
 	var finalString string
 	if len(lx.stringParts) > 0 {
@@ -177,37 +164,30 @@ func (lx *lexer) emitString() {
 	lx.start = lx.pos
 	lx.ilstart = lx.lstart
 }
-
 func (lx *lexer) addCurrentStringPart(offset int) {
 	lx.stringParts = append(lx.stringParts, lx.input[lx.start:lx.pos-offset])
 	lx.start = lx.pos
 }
-
 func (lx *lexer) addStringPart(s string) stateFn {
 	lx.stringParts = append(lx.stringParts, s)
 	lx.start = lx.pos
 	return lx.stringStateFn
 }
-
 func (lx *lexer) hasEscapedParts() bool {
 	return len(lx.stringParts) > 0
 }
-
 func (lx *lexer) next() (r rune) {
 	if lx.pos >= len(lx.input) {
 		lx.width = 0
 		return eof
 	}
-
 	if lx.input[lx.pos] == '\n' {
 		lx.line++
-
 		// Mark start position of current line.
 		lx.lstart = lx.pos
 	}
 	r, lx.width = utf8.DecodeRuneInString(lx.input[lx.pos:])
 	lx.pos += lx.width
-
 	return r
 }
 
@@ -241,7 +221,6 @@ func (lx *lexer) errorf(format string, values ...any) stateFn {
 			values[i] = escapeSpecial(v)
 		}
 	}
-
 	// Position of error in current line.
 	pos := lx.pos - lx.lstart
 	lx.items <- item{
@@ -259,7 +238,6 @@ func lexTop(lx *lexer) stateFn {
 	if unicode.IsSpace(r) {
 		return lexSkip(lx, lexTop)
 	}
-
 	switch r {
 	case topOptStart:
 		lx.push(lexTop)
@@ -282,7 +260,6 @@ func lexTop(lx *lexer) stateFn {
 		lx.emit(itemEOF)
 		return nil
 	}
-
 	// At this point, the only valid item can be a key, so we back up
 	// and let the key lexer do the rest.
 	lx.backup()
@@ -317,13 +294,11 @@ func lexTopValueEnd(lx *lexer) stateFn {
 	return lx.errorf("Expected a top-level value to end with a new line, "+
 		"comment or EOF, but got '%v' instead.", r)
 }
-
 func lexBlockStart(lx *lexer) stateFn {
 	r := lx.next()
 	if unicode.IsSpace(r) {
 		return lexSkip(lx, lexBlockStart)
 	}
-
 	switch r {
 	case topOptStart:
 		lx.push(lexBlockEnd)
@@ -349,7 +324,6 @@ func lexBlockStart(lx *lexer) stateFn {
 		lx.emit(itemEOF)
 		return nil
 	}
-
 	// At this point, the only valid item can be a key, so we back up
 	// and let the key lexer do the rest.
 	lx.backup()
@@ -627,7 +601,6 @@ func lexValue(lx *lexer) stateFn {
 	if isWhitespace(r) {
 		return lexSkip(lx, lexValue)
 	}
-
 	switch {
 	case r == arrayStart:
 		lx.ignore()
@@ -685,7 +658,6 @@ func lexArrayValue(lx *lexer) stateFn {
 	case r == arrayEnd:
 		return lexArrayEnd
 	}
-
 	lx.backup()
 	lx.push(lexArrayValueEnd)
 	return lexValue
@@ -958,7 +930,6 @@ func lexString(lx *lexer) stateFn {
 	case isNL(r) || r == eof || r == optValTerm ||
 		r == arrayValTerm || r == arrayEnd || r == mapEnd ||
 		isWhitespace(r):
-
 		lx.backup()
 		if lx.hasEscapedParts() {
 			lx.emitString()
@@ -989,7 +960,6 @@ func lexBlock(lx *lexer) stateFn {
 	case r == blockEnd:
 		lx.backup()
 		lx.backup()
-
 		// Looking for a ')' character on a line by itself, if the previous
 		// character isn't a new line, then break so we keep processing the block.
 		if lx.next() != '\n' {
@@ -997,7 +967,6 @@ func lexBlock(lx *lexer) stateFn {
 			break
 		}
 		lx.next()
-
 		// Make sure the next character is a new line or an eof. We want a ')' on a
 		// bare line by itself.
 		switch lx.next() {
@@ -1195,12 +1164,10 @@ func lexFloat(lx *lexer) stateFn {
 	if unicode.IsDigit(r) {
 		return lexFloat
 	}
-
 	// Not a digit, if its another '.', need to see if we falsely assumed a float.
 	if r == '.' {
 		return lexIPAddr
 	}
-
 	lx.backup()
 	lx.emit(itemFloat)
 	return lx.pop()
@@ -1261,11 +1228,9 @@ func isKeySeparator(r rune) bool {
 func isWhitespace(r rune) bool {
 	return r == '\t' || r == ' '
 }
-
 func isNL(r rune) bool {
 	return r == '\n' || r == '\r'
 }
-
 func (itype itemType) String() string {
 	switch itype {
 	case itemError:
@@ -1305,11 +1270,9 @@ func (itype itemType) String() string {
 	}
 	panic(fmt.Sprintf("BUG: Unknown type '%s'.", itype.String()))
 }
-
 func (item item) String() string {
 	return fmt.Sprintf("(%s, '%s', %d, %d)", item.typ.String(), item.val, item.line, item.pos)
 }
-
 func escapeSpecial(c rune) string {
 	switch c {
 	case '\n':

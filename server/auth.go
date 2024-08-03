@@ -10,7 +10,6 @@
 // WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 // See the License for the specific language governing permissions and
 // limitations under the License.
-
 package server
 
 import (
@@ -22,17 +21,16 @@ import (
 	"encoding/base64"
 	"encoding/hex"
 	"fmt"
+	"github.com/nats-io/jwt/v2"
+	"github.com/nats-io/nats-server/v2/internal/ldap"
+	"github.com/nats-io/nkeys"
+	"golang.org/x/crypto/bcrypt"
 	"net"
 	"net/url"
 	"regexp"
 	"strings"
 	"sync/atomic"
 	"time"
-
-	"github.com/nats-io/jwt/v2"
-	"github.com/nats-io/nats-server/v2/internal/ldap"
-	"github.com/nats-io/nkeys"
-	"golang.org/x/crypto/bcrypt"
 )
 
 // Authentication is an interface for implementing authentication
@@ -59,22 +57,22 @@ type ClientAuthentication interface {
 
 // NkeyUser is for multiple nkey based users
 type NkeyUser struct {
-	Nkey                   string              `json:"user"`
-	Issued                 int64               `json:"issued,omitempty"` // this is a copy of the issued at (iat) field in the jwt
 	Permissions            *Permissions        `json:"permissions,omitempty"`
 	Account                *Account            `json:"account,omitempty"`
-	SigningKey             string              `json:"signing_key,omitempty"`
 	AllowedConnectionTypes map[string]struct{} `json:"connection_types,omitempty"`
+	Nkey                   string              `json:"user"`
+	SigningKey             string              `json:"signing_key,omitempty"`
+	Issued                 int64               `json:"issued,omitempty"` // this is a copy of the issued at (iat) field in the jwt
 }
 
 // User is for multiple accounts/users.
 type User struct {
-	Username               string              `json:"user"`
-	Password               string              `json:"password"`
+	ConnectionDeadline     time.Time           `json:"connection_deadline,omitempty"`
 	Permissions            *Permissions        `json:"permissions,omitempty"`
 	Account                *Account            `json:"account,omitempty"`
-	ConnectionDeadline     time.Time           `json:"connection_deadline,omitempty"`
 	AllowedConnectionTypes map[string]struct{} `json:"connection_types,omitempty"`
+	Username               string              `json:"user"`
+	Password               string              `json:"password"`
 }
 
 // clone performs a deep copy of the User struct, returning a new clone with
@@ -87,14 +85,12 @@ func (u *User) clone() *User {
 	*clone = *u
 	// Account is not cloned because it is always by reference to an existing struct.
 	clone.Permissions = u.Permissions.clone()
-
 	if u.AllowedConnectionTypes != nil {
 		clone.AllowedConnectionTypes = make(map[string]struct{})
 		for k, v := range u.AllowedConnectionTypes {
 			clone.AllowedConnectionTypes[k] = v
 		}
 	}
-
 	return clone
 }
 
@@ -108,14 +104,12 @@ func (n *NkeyUser) clone() *NkeyUser {
 	*clone = *n
 	// Account is not cloned because it is always by reference to an existing struct.
 	clone.Permissions = n.Permissions.clone()
-
 	if n.AllowedConnectionTypes != nil {
 		clone.AllowedConnectionTypes = make(map[string]struct{})
 		for k, v := range n.AllowedConnectionTypes {
 			clone.AllowedConnectionTypes[k] = v
 		}
 	}
-
 	return clone
 }
 
@@ -265,7 +259,6 @@ func (s *Server) configureAuthorization() {
 	if opts == nil {
 		return
 	}
-
 	// Check for multiple users first
 	// This just checks and sets up the user map if we have multiple users.
 	if opts.CustomClientAuthentication != nil {
@@ -282,12 +275,10 @@ func (s *Server) configureAuthorization() {
 		s.nkeys = nil
 		s.info.AuthRequired = false
 	}
-
 	// Do similar for websocket config
 	s.wsConfigAuth(&opts.Websocket)
 	// And for mqtt config
 	s.mqttConfigAuth(&opts.MQTT)
-
 	// Check for server configured auth callouts.
 	if opts.AuthCallout != nil {
 		s.mu.Unlock()
@@ -322,7 +313,6 @@ func (s *Server) configureAuthorization() {
 func (s *Server) buildNkeysAndUsersFromOptions(nko []*NkeyUser, uo []*User) (map[string]*NkeyUser, map[string]*User) {
 	var nkeys map[string]*NkeyUser
 	var users map[string]*User
-
 	if nko != nil {
 		nkeys = make(map[string]*NkeyUser, len(nko))
 		for _, u := range nko {
@@ -378,23 +368,19 @@ func (s *Server) checkAuthentication(c *client) bool {
 // This could be nkey, token, or username/password based.
 func (s *Server) isClientAuthorized(c *client) bool {
 	opts := s.getOpts()
-
 	// Check custom auth first, then jwts, then nkeys, then
 	// multiple users with TLS map if enabled, then token,
 	// then single user/pass.
 	if opts.CustomClientAuthentication != nil && !opts.CustomClientAuthentication.Check(c) {
 		return false
 	}
-
 	if opts.CustomClientAuthentication == nil && !s.processClientOrLeafAuthentication(c, opts) {
 		return false
 	}
-
 	if c.kind == CLIENT || c.kind == LEAF {
 		// Generate an event if we have a system account.
 		s.accountConnectEvent(c)
 	}
-
 	return true
 }
 
@@ -416,7 +402,6 @@ func (c *client) matchesPinnedCert(tlsPinnedCerts PinnedCertSet) bool {
 	}
 	return true
 }
-
 func processUserPermissionsTemplate(lim jwt.UserPermissionLimits, ujwt *jwt.UserClaims, acc *Account) (jwt.UserPermissionLimits, error) {
 	nArrayCartesianProduct := func(a ...[]string) [][]string {
 		c := 1
@@ -467,10 +452,8 @@ func processUserPermissionsTemplate(lim jwt.UserPermissionLimits, ujwt *jwt.User
 		emittedList := make([]string, 0, len(list))
 		for i := 0; i < len(list); i++ {
 			tokens := strings.Split(list[i], tsep)
-
 			newTokens := make([]string, len(tokens))
 			tagValues := [][]string{}
-
 			for tokenNum, tk := range tokens {
 				if strings.HasPrefix(tk, "{{") && strings.HasSuffix(tk, "}}") {
 					op := strings.ToLower(strings.TrimSuffix(strings.TrimPrefix(tk, "{{"), "}}"))
@@ -491,7 +474,6 @@ func processUserPermissionsTemplate(lim jwt.UserPermissionLimits, ujwt *jwt.User
 						// insert dummy tav value that will throw of subject validation (in case nothing is found)
 						tk = _EMPTY_
 						// collect list of matching tag values
-
 						var tags jwt.TagList
 						var tagPrefix string
 						if strings.HasPrefix(op, "account-tag(") {
@@ -505,7 +487,6 @@ func processUserPermissionsTemplate(lim jwt.UserPermissionLimits, ujwt *jwt.User
 							tagPrefix = fmt.Sprintf("%s:", strings.ToLower(
 								strings.TrimSuffix(strings.TrimPrefix(op, "tag("), ")")))
 						}
-
 						valueList := []string{}
 						for _, tag := range tags {
 							if strings.HasPrefix(tag, tagPrefix) {
@@ -559,10 +540,8 @@ func processUserPermissionsTemplate(lim jwt.UserPermissionLimits, ujwt *jwt.User
 		}
 		return emittedList, nil
 	}
-
 	subAllowWasNotEmpty := len(lim.Permissions.Sub.Allow) > 0
 	pubAllowWasNotEmpty := len(lim.Permissions.Pub.Allow) > 0
-
 	var err error
 	if lim.Permissions.Sub.Allow, err = applyTemplate(lim.Permissions.Sub.Allow, false); err != nil {
 		return jwt.UserPermissionLimits{}, err
@@ -573,7 +552,6 @@ func processUserPermissionsTemplate(lim jwt.UserPermissionLimits, ujwt *jwt.User
 	} else if lim.Permissions.Pub.Deny, err = applyTemplate(lim.Permissions.Pub.Deny, true); err != nil {
 		return jwt.UserPermissionLimits{}, err
 	}
-
 	// if pub/sub allow were not empty, but are empty post template processing, add in a "deny >" to compensate
 	if subAllowWasNotEmpty && len(lim.Permissions.Sub.Allow) == 0 {
 		lim.Permissions.Sub.Deny.Add(">")
@@ -583,7 +561,6 @@ func processUserPermissionsTemplate(lim jwt.UserPermissionLimits, ujwt *jwt.User
 	}
 	return lim, nil
 }
-
 func (s *Server) processClientOrLeafAuthentication(c *client, opts *Options) (authorized bool) {
 	var (
 		nkey *NkeyUser
@@ -594,7 +571,6 @@ func (s *Server) processClientOrLeafAuthentication(c *client, opts *Options) (au
 		err  error
 		ao   bool // auth override
 	)
-
 	// Check if we have auth callouts enabled at the server level or in the bound account.
 	defer func() {
 		// Default reason
@@ -630,7 +606,6 @@ func (s *Server) processClientOrLeafAuthentication(c *client, opts *Options) (au
 					}
 				}
 			}
-
 			// Not delegated, so return with previous authorized result.
 			if !delegated {
 				if !authorized {
@@ -639,7 +614,6 @@ func (s *Server) processClientOrLeafAuthentication(c *client, opts *Options) (au
 				return
 			}
 		}
-
 		// We have auth callout set here.
 		var skip bool
 		// Check if we are on the list of auth_users.
@@ -654,7 +628,6 @@ func (s *Server) processClientOrLeafAuthentication(c *client, opts *Options) (au
 				}
 			}
 		}
-
 		// If we are here we have an auth callout defined and we have failed auth so far
 		// so we will callout to our auth backend for processing.
 		if !skip {
@@ -683,7 +656,6 @@ func (s *Server) processClientOrLeafAuthentication(c *client, opts *Options) (au
 			s.sendAccountAuthErrorEvent(c, acc, reason)
 		}
 	}()
-
 	s.mu.Lock()
 	authRequired := s.info.AuthRequired
 	if !authRequired {
@@ -741,7 +713,6 @@ func (s *Server) processClientOrLeafAuthentication(c *client, opts *Options) (au
 	} else {
 		tlsMap = opts.LeafNode.TLSMap
 	}
-
 	if !ao {
 		noAuthUser = opts.NoAuthUser
 		// If a leaf connects using websocket, and websocket{} block has a no_auth_user
@@ -753,7 +724,6 @@ func (s *Server) processClientOrLeafAuthentication(c *client, opts *Options) (au
 		password = opts.Password
 		token = opts.Authorization
 	}
-
 	// Check if we have trustedKeys defined in the server. If so we require a user jwt.
 	if s.trustedKeys != nil {
 		if c.opts.JWT == _EMPTY_ {
@@ -777,7 +747,6 @@ func (s *Server) processClientOrLeafAuthentication(c *client, opts *Options) (au
 		}
 		pinnedAcounts = opts.resolverPinnedAccounts
 	}
-
 	// Check if we have nkeys or users for client.
 	hasNkeys := len(s.nkeys) > 0
 	hasUsers := len(s.users) > 0
@@ -812,11 +781,9 @@ func (s *Server) processClientOrLeafAuthentication(c *client, opts *Options) (au
 					user = usr
 					return usr.Username, true
 				}
-
 				if certDN == nil {
 					return _EMPTY_, false
 				}
-
 				// Look through the accounts for a DN that is equal to the one
 				// presented by the certificate.
 				dns := make(map[*User]*ldap.DN)
@@ -834,12 +801,10 @@ func (s *Server) processClientOrLeafAuthentication(c *client, opts *Options) (au
 						user = usr
 						return usr.Username, true
 					}
-
 					// In case it did not match exactly, then collect the DNs
 					// and try to match later in case the DN was reordered.
 					dns[usr] = inputDN
 				}
-
 				// Check in case the DN was reordered.
 				for usr, inputDN := range dns {
 					if inputDN.RDNsMatch(certDN) {
@@ -879,7 +844,6 @@ func (s *Server) processClientOrLeafAuthentication(c *client, opts *Options) (au
 		}
 	}
 	s.mu.Unlock()
-
 	// If we have a jwt and a userClaim, make sure we have the Account, etc associated.
 	// We need to look up the account. This will use an account resolver if one is present.
 	if juc != nil {
@@ -992,12 +956,10 @@ func (s *Server) processClientOrLeafAuthentication(c *client, opts *Options) (au
 			c.Errorf("Outside connect times")
 			return false
 		}
-
 		nkey = buildInternalNkeyUser(juc, allowedConnTypes, acc)
 		if err := c.RegisterNkeyUser(nkey); err != nil {
 			return false
 		}
-
 		// Warn about JetStream restrictions
 		if c.perms != nil {
 			deniedPub := []string{}
@@ -1018,17 +980,14 @@ func (s *Server) processClientOrLeafAuthentication(c *client, opts *Options) (au
 				c.Noticef("Connected %s has JetStream denied on pub: %v sub: %v", c.kindString(), deniedPub, deniedSub)
 			}
 		}
-
 		// Hold onto the user's public key.
 		c.mu.Lock()
 		c.pubKey = juc.Subject
 		c.tags = juc.Tags
 		c.nameTag = juc.Name
 		c.mu.Unlock()
-
 		// Check if we need to set an auth timer if the user jwt expires.
 		c.setExpiration(juc.Claims(), validFor)
-
 		acc.mu.RLock()
 		c.Debugf("Authenticated JWT: %s %q (claim-name: %q, claim-tags: %q) "+
 			"signed with %q by Account %q (claim-name: %q, claim-tags: %q) signed with %q has mappings %t accused %p",
@@ -1036,7 +995,6 @@ func (s *Server) processClientOrLeafAuthentication(c *client, opts *Options) (au
 		acc.mu.RUnlock()
 		return true
 	}
-
 	if nkey != nil {
 		// If we did not match noAuthUser check signature which is required.
 		if nkey.Nkey != noAuthUser {
@@ -1077,7 +1035,6 @@ func (s *Server) processClientOrLeafAuthentication(c *client, opts *Options) (au
 		}
 		return ok
 	}
-
 	if c.kind == CLIENT {
 		if token != _EMPTY_ {
 			return comparePasswords(token, c.opts.Token)
@@ -1096,7 +1053,6 @@ func (s *Server) processClientOrLeafAuthentication(c *client, opts *Options) (au
 	}
 	return false
 }
-
 func getTLSAuthDCs(rdns *pkix.RDNSequence) string {
 	dcOID := asn1.ObjectIdentifier{0, 9, 2342, 19200300, 100, 1, 25}
 	dcs := []string{}
@@ -1133,7 +1089,6 @@ func checkClientTLSCertSubject(c *client, fn tlsMapAuthFn) bool {
 	if len(tlsState.PeerCertificates) > 1 {
 		c.Debugf("Multiple peer certificates found, selecting first")
 	}
-
 	hasSANs := len(cert.DNSNames) > 0
 	hasEmailAddresses := len(cert.EmailAddresses) > 0
 	hasSubject := len(cert.Subject.String()) > 0
@@ -1142,7 +1097,6 @@ func checkClientTLSCertSubject(c *client, fn tlsMapAuthFn) bool {
 		c.Debugf("User required in cert, none found")
 		return false
 	}
-
 	switch {
 	case hasEmailAddresses:
 		for _, u := range cert.EmailAddresses {
@@ -1168,11 +1122,9 @@ func checkClientTLSCertSubject(c *client, fn tlsMapAuthFn) bool {
 			}
 		}
 	}
-
 	// Use the string representation of the full RDN Sequence including
 	// the domain components in case there are any.
 	rdn := cert.Subject.ToRDNSequence().String()
-
 	// Match using the raw subject to avoid ignoring attributes.
 	// https://github.com/golang/go/issues/12342
 	dn, err := ldap.FromRawCertSubject(cert.RawSubject)
@@ -1183,7 +1135,6 @@ func checkClientTLSCertSubject(c *client, fn tlsMapAuthFn) bool {
 		}
 		c.Debugf("DistinguishedNameMatch could not be used for auth [%q]", rdn)
 	}
-
 	var rdns pkix.RDNSequence
 	if _, err := asn1.Unmarshal(cert.RawSubject, &rdns); err == nil {
 		// If found domain components then include roughly following
@@ -1203,18 +1154,15 @@ func checkClientTLSCertSubject(c *client, fn tlsMapAuthFn) bool {
 			c.Debugf("RDNSequence could not be used for auth [%q]", u)
 		}
 	}
-
 	// If no match, then use the string representation of the RDNSequence
 	// from the subject without the domainComponents.
 	if match, ok := fn(rdn, nil, false); ok {
 		c.Debugf("Using certificate subject for auth [%q]", match)
 		return true
 	}
-
 	c.Debugf("User in cert [%q], not found", rdn)
 	return false
 }
-
 func dnsAltNameLabels(dnsAltName string) []string {
 	return strings.Split(strings.ToLower(dnsAltName), ".")
 }
@@ -1251,13 +1199,11 @@ URLS:
 func (s *Server) isRouterAuthorized(c *client) bool {
 	// Snapshot server options.
 	opts := s.getOpts()
-
 	// Check custom auth first, then TLS map if enabled
 	// then single user/pass.
 	if opts.CustomRouterAuthentication != nil {
 		return opts.CustomRouterAuthentication.Check(c)
 	}
-
 	if opts.Cluster.TLSMap || opts.Cluster.TLSCheckKnownURLs {
 		return checkClientTLSCertSubject(c, func(user string, _ *ldap.DN, isDNSAltName bool) (string, bool) {
 			if user == _EMPTY_ {
@@ -1274,11 +1220,9 @@ func (s *Server) isRouterAuthorized(c *client) bool {
 			return _EMPTY_, false
 		})
 	}
-
 	if opts.Cluster.Username == _EMPTY_ {
 		return true
 	}
-
 	if opts.Cluster.Username != c.opts.Username {
 		return false
 	}
@@ -1292,7 +1236,6 @@ func (s *Server) isRouterAuthorized(c *client) bool {
 func (s *Server) isGatewayAuthorized(c *client) bool {
 	// Snapshot server options.
 	opts := s.getOpts()
-
 	// Check whether TLS map is enabled, otherwise use single user/pass.
 	if opts.Gateway.TLSMap || opts.Gateway.TLSCheckKnownURLs {
 		return checkClientTLSCertSubject(c, func(user string, _ *ldap.DN, isDNSAltName bool) (string, bool) {
@@ -1313,17 +1256,14 @@ func (s *Server) isGatewayAuthorized(c *client) bool {
 			return _EMPTY_, false
 		})
 	}
-
 	if opts.Gateway.Username == _EMPTY_ {
 		return true
 	}
-
 	if opts.Gateway.Username != c.opts.Username {
 		return false
 	}
 	return comparePasswords(opts.Gateway.Password, c.opts.Password)
 }
-
 func (s *Server) registerLeafWithAccount(c *client, account string) bool {
 	var err error
 	acc := s.globalAccount()
@@ -1344,7 +1284,6 @@ func (s *Server) registerLeafWithAccount(c *client, account string) bool {
 // isLeafNodeAuthorized will check for auth for an inbound leaf node connection.
 func (s *Server) isLeafNodeAuthorized(c *client) bool {
 	opts := s.getOpts()
-
 	isAuthorized := func(username, password, account string) bool {
 		if username != c.opts.Username {
 			return false
@@ -1354,7 +1293,6 @@ func (s *Server) isLeafNodeAuthorized(c *client) bool {
 		}
 		return s.registerLeafWithAccount(c, account)
 	}
-
 	// If leafnodes config has an authorization{} stanza, this takes precedence.
 	// The user in CONNECT must match. We will bind to the account associated
 	// with that user (from the leafnode's authorization{} config).
@@ -1416,7 +1354,6 @@ func (s *Server) isLeafNodeAuthorized(c *client) bool {
 			// but it will also register with proper account.
 			return isAuthorized(user.Username, user.Password, accName)
 		}
-
 		// This is expected to be a very small array.
 		for _, u := range opts.LeafNode.Users {
 			if u.Username == c.opts.Username {
@@ -1429,9 +1366,7 @@ func (s *Server) isLeafNodeAuthorized(c *client) bool {
 		}
 		return false
 	}
-
 	// We are here if we accept leafnode connections without any credentials.
-
 	// Still, if the CONNECT has some user info, we will bind to the
 	// user's account or to the specified default account (if provided)
 	// or to the global account.
@@ -1446,10 +1381,8 @@ func isBcrypt(password string) bool {
 	if strings.HasPrefix(password, "$") {
 		return validBcryptPrefix.MatchString(password)
 	}
-
 	return false
 }
-
 func comparePasswords(serverPassword, clientPassword string) bool {
 	// Check to see if the server password is a bcrypt hash
 	if isBcrypt(serverPassword) {
@@ -1467,7 +1400,6 @@ func comparePasswords(serverPassword, clientPassword string) bool {
 	}
 	return true
 }
-
 func validateAuth(o *Options) error {
 	if err := validatePinnedCerts(o.TLSPinnedCerts); err != nil {
 		return err
@@ -1484,7 +1416,6 @@ func validateAuth(o *Options) error {
 	}
 	return validateNoAuthUser(o, o.NoAuthUser)
 }
-
 func validateAllowedConnectionTypes(m map[string]struct{}) error {
 	for ct := range m {
 		ctuc := strings.ToUpper(ct)
@@ -1503,7 +1434,6 @@ func validateAllowedConnectionTypes(m map[string]struct{}) error {
 	}
 	return nil
 }
-
 func validateNoAuthUser(o *Options, noAuthUser string) error {
 	if noAuthUser == _EMPTY_ {
 		return nil
@@ -1511,7 +1441,6 @@ func validateNoAuthUser(o *Options, noAuthUser string) error {
 	if len(o.TrustedOperators) > 0 {
 		return fmt.Errorf("no_auth_user not compatible with Trusted Operator")
 	}
-
 	if o.Nkeys == nil && o.Users == nil {
 		return fmt.Errorf(`no_auth_user: "%s" present, but users/nkeys are not defined`, noAuthUser)
 	}

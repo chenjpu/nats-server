@@ -1,3 +1,5 @@
+//go:build windows
+
 // Copyright 2024 The NATS Authors
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -10,22 +12,18 @@
 // WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 // See the License for the specific language governing permissions and
 // limitations under the License.
-
-//go:build windows
-
 package tpm
 
 import (
 	"encoding/base64"
 	"encoding/json"
 	"fmt"
-	"io"
-	"os"
-	"path/filepath"
-
 	"github.com/google/go-tpm/legacy/tpm2"
 	"github.com/google/go-tpm/tpmutil"
 	"github.com/nats-io/nkeys"
+	"io"
+	"os"
+	"path/filepath"
 )
 
 var (
@@ -36,17 +34,17 @@ var (
 // How this works:
 // Create a Storage Root Key (SRK) in the TPM.
 // If existing JS Encryption keys do not exist on disk.
-// 	  - Create a JetStream encryption key (js key) and seal it to the SRK
-//      using a provided js encryption key password.
-// 	  - Save the public and private blobs to a file on disk.
-//    - Return the new js encryption key (the private portion of the nkey)
+//   - Create a JetStream encryption key (js key) and seal it to the SRK
+//     using a provided js encryption key password.
+//   - Save the public and private blobs to a file on disk.
+//   - Return the new js encryption key (the private portion of the nkey)
+//
 // Otherwise (keys exist on disk)
-//    - Read the public and private blobs from disk
-//    - Load them into the TPM
-//    - Unseal the js key using the TPM, and the provided js encryption keys password.
+//   - Read the public and private blobs from disk
+//   - Load them into the TPM
+//   - Unseal the js key using the TPM, and the provided js encryption keys password.
 //
 // Note: a SRK password for the SRK is supported but not tested here.
-
 // Gets/Regenerates the Storage Root Key (SRK) from the TPM. Caller MUST flush this handle when done.
 func regenerateSRK(rwc io.ReadWriteCloser, srkPassword string) (tpmutil.Handle, error) {
 	// Default EK template defined in:
@@ -75,9 +73,9 @@ func regenerateSRK(rwc io.ReadWriteCloser, srkPassword string) (tpmutil.Handle, 
 }
 
 type natsTPMPersistedKeys struct {
-	Version    int    `json:"version"`
 	PrivateKey []byte `json:"private_key"`
 	PublicKey  []byte `json:"public_key"`
+	Version    int    `json:"version"`
 }
 
 // Writes the private and public blobs to disk in a single file. If the directory does
@@ -87,7 +85,6 @@ func writeTPMKeysToFile(filename string, privateBlob []byte, publicBlob []byte) 
 	if err := os.MkdirAll(keyDir, 0750); err != nil {
 		return fmt.Errorf("unable to create/access directory %q: %v", keyDir, err)
 	}
-
 	// Create a new set of persisted keys. Note that the private key doesn't necessarily
 	// need to be protected as the TPM password is required to use unseal, although it's
 	// a good idea to put this in a secure location accessible to the server.
@@ -117,16 +114,13 @@ func readTPMKeysFromFile(filename string) ([]byte, []byte, error) {
 	if err != nil {
 		return nil, nil, err
 	}
-
 	var tpmKeys natsTPMPersistedKeys
 	if err := json.Unmarshal(keysJSON, &tpmKeys); err != nil {
 		return nil, nil, fmt.Errorf("unable to unmarshal TPM file keys JSON from %s: %v", filename, err)
 	}
-
 	// Placeholder for future-proofing. Here is where we would
 	// check the current version against tpmKeys.Version and
 	// handle any changes.
-
 	// Base64 decode the private and public blobs.
 	privateBlob := make([]byte, base64.StdEncoding.DecodedLen(len(tpmKeys.PrivateKey)))
 	publicBlob := make([]byte, base64.StdEncoding.DecodedLen(len(tpmKeys.PublicKey)))
@@ -182,7 +176,6 @@ func unsealJsEncrpytionKey(rwc io.ReadWriteCloser, pcr int, srkHandle tpmutil.Ha
 		return "", fmt.Errorf("unable to load data: %v", err)
 	}
 	defer tpm2.FlushContext(rwc, objectHandle)
-
 	// Create the authorization session with TPM.
 	sessHandle, _, err := policyPCRPasswordSession(rwc, pcr)
 	if err != nil {
@@ -220,7 +213,6 @@ func policyPCRPasswordSession(rwc io.ReadWriteCloser, pcr int) (sessHandle tpmut
 			}
 		}
 	}()
-
 	pcrSelection := tpm2.PCRSelection{
 		Hash: tpm2.AlgSHA256,
 		PCRs: []int{pcr},
@@ -248,7 +240,6 @@ func LoadJetStreamEncryptionKeyFromTPM(srkPassword, jsKeyFile, jsKeyPassword str
 		return "", fmt.Errorf("could not open the TPM: %v", err)
 	}
 	defer rwc.Close()
-
 	// Load the key from the TPM
 	srkHandle, err := regenerateSRK(rwc, srkPassword)
 	defer func() {
@@ -271,7 +262,6 @@ func LoadJetStreamEncryptionKeyFromTPM(srkPassword, jsKeyFile, jsKeyPassword str
 		}
 		return "", fmt.Errorf("unable to load key from TPM: %v", err)
 	}
-
 	// Unseal the JetStream encryption key using the TPM.
 	jsek, err := unsealJsEncrpytionKey(rwc, pcr, srkHandle, srkPassword, jsKeyPassword, publicBlob, privateBlob)
 	if err != nil {

@@ -10,7 +10,6 @@
 // WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 // See the License for the specific language governing permissions and
 // limitations under the License.
-
 package certidp
 
 import (
@@ -19,11 +18,10 @@ import (
 	"encoding/base64"
 	"encoding/json"
 	"fmt"
+	"golang.org/x/crypto/ocsp"
 	"net/url"
 	"strings"
 	"time"
-
-	"golang.org/x/crypto/ocsp"
 )
 
 const (
@@ -63,10 +61,8 @@ func GetStatusAssertionStr(sa int) string {
 		// set unknown as fallback
 		v = ocsp.Unknown
 	}
-
 	return StatusAssertionValToStr[v]
 }
-
 func (sa StatusAssertion) MarshalJSON() ([]byte, error) {
 	// This ensures that we don't unintentionally default to "good" when there's no map entry.
 	// (see more details in the GetStatusAssertionStr() comment)
@@ -77,7 +73,6 @@ func (sa StatusAssertion) MarshalJSON() ([]byte, error) {
 	}
 	return json.Marshal(str)
 }
-
 func (sa *StatusAssertion) UnmarshalJSON(in []byte) error {
 	// This ensures that we don't unintentionally default to "good" when there's no map entry.
 	// (see more details in the GetStatusAssertionStr() comment)
@@ -98,13 +93,13 @@ type ChainLink struct {
 
 // OCSPPeerConfig holds the parsed OCSP peer configuration section of TLS configuration
 type OCSPPeerConfig struct {
-	Verify                 bool
 	Timeout                float64
 	ClockSkew              float64
+	TTLUnsetNextUpdate     float64
+	Verify                 bool
 	WarnOnly               bool
 	UnknownIsGood          bool
 	AllowWhenCAUnreachable bool
-	TTLUnsetNextUpdate     float64
 }
 
 func NewOCSPPeerConfig() *OCSPPeerConfig {
@@ -127,7 +122,6 @@ type Log struct {
 	Errorf  func(format string, v ...any)
 	Tracef  func(format string, v ...any)
 }
-
 type CertInfo struct {
 	Subject     string `json:"subject,omitempty"`
 	Issuer      string `json:"issuer,omitempty"`
@@ -180,7 +174,6 @@ func GenerateFingerprint(cert *x509.Certificate) string {
 	data := sha256.Sum256(cert.Raw)
 	return base64.StdEncoding.EncodeToString(data[:])
 }
-
 func getWebEndpoints(uris []string) []*url.URL {
 	var urls []*url.URL
 	for _, uri := range uris {

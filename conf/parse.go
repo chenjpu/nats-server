@@ -10,7 +10,6 @@
 // WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 // See the License for the specific language governing permissions and
 // limitations under the License.
-
 // Package conf supports a configuration file format used by gnatsd. It is
 // a flexible format that combines the best of traditional
 // configuration formats and newer styles such as JSON and YAML.
@@ -24,7 +23,6 @@ package conf
 // semicolons as value terminators in key/value assignments are optional
 //
 // see parse_test.go for more examples.
-
 import (
 	"fmt"
 	"os"
@@ -36,24 +34,18 @@ import (
 )
 
 type parser struct {
+	// The current scoped context, can be array or map
+	ctx     any
 	mapping map[string]any
 	lx      *lexer
-
-	// The current scoped context, can be array or map
-	ctx any
-
-	// stack of contexts, either map or array/slice stack
-	ctxs []any
-
-	// Keys stack
-	keys []string
-
-	// Keys stack as items
-	ikeys []item
-
 	// The config file path, empty by default.
 	fp string
-
+	// stack of contexts, either map or array/slice stack
+	ctxs []any
+	// Keys stack
+	keys []string
+	// Keys stack as items
+	ikeys []item
 	// pedantic reports error when configuration is not correct.
 	pedantic bool
 }
@@ -75,7 +67,6 @@ func ParseFile(fp string) (map[string]any, error) {
 	if err != nil {
 		return nil, fmt.Errorf("error opening config file: %v", err)
 	}
-
 	p, err := parse(string(data), fp, false)
 	if err != nil {
 		return nil, err
@@ -89,42 +80,35 @@ func ParseFileWithChecks(fp string) (map[string]any, error) {
 	if err != nil {
 		return nil, err
 	}
-
 	p, err := parse(string(data), fp, true)
 	if err != nil {
 		return nil, err
 	}
-
 	return p.mapping, nil
 }
 
 type token struct {
-	item         item
 	value        any
-	usedVariable bool
 	sourceFile   string
+	item         item
+	usedVariable bool
 }
 
 func (t *token) Value() any {
 	return t.value
 }
-
 func (t *token) Line() int {
 	return t.item.line
 }
-
 func (t *token) IsUsedVariable() bool {
 	return t.usedVariable
 }
-
 func (t *token) SourceFile() string {
 	return t.sourceFile
 }
-
 func (t *token) Position() int {
 	return t.item.pos
 }
-
 func parse(data, fp string, pedantic bool) (p *parser, err error) {
 	p = &parser{
 		mapping:  make(map[string]any),
@@ -136,7 +120,6 @@ func parse(data, fp string, pedantic bool) (p *parser, err error) {
 		pedantic: pedantic,
 	}
 	p.pushContext(p.mapping)
-
 	var prevItem item
 	for {
 		it := p.next()
@@ -155,16 +138,13 @@ func parse(data, fp string, pedantic bool) (p *parser, err error) {
 	}
 	return p, nil
 }
-
 func (p *parser) next() item {
 	return p.lx.nextItem()
 }
-
 func (p *parser) pushContext(ctx any) {
 	p.ctxs = append(p.ctxs, ctx)
 	p.ctx = ctx
 }
-
 func (p *parser) popContext() any {
 	if len(p.ctxs) == 0 {
 		panic("BUG in parser, context stack empty")
@@ -175,11 +155,9 @@ func (p *parser) popContext() any {
 	p.ctx = p.ctxs[len(p.ctxs)-1]
 	return last
 }
-
 func (p *parser) pushKey(key string) {
 	p.keys = append(p.keys, key)
 }
-
 func (p *parser) popKey() string {
 	if len(p.keys) == 0 {
 		panic("BUG in parser, keys stack empty")
@@ -189,11 +167,9 @@ func (p *parser) popKey() string {
 	p.keys = p.keys[0:li]
 	return last
 }
-
 func (p *parser) pushItemKey(key item) {
 	p.ikeys = append(p.ikeys, key)
 }
-
 func (p *parser) popItemKey() item {
 	if len(p.ikeys) == 0 {
 		panic("BUG in parser, item keys stack empty")
@@ -203,7 +179,6 @@ func (p *parser) popItemKey() item {
 	p.ikeys = p.ikeys[0:li]
 	return last
 }
-
 func (p *parser) processItem(it item, fp string) error {
 	setValue := func(it item, v any) {
 		if p.pedantic {
@@ -212,7 +187,6 @@ func (p *parser) processItem(it item, fp string) error {
 			p.setValue(v)
 		}
 	}
-
 	switch it.typ {
 	case itemError:
 		return fmt.Errorf("Parse error on line %d: '%s'", it.line, it.val)
@@ -221,7 +195,6 @@ func (p *parser) processItem(it item, fp string) error {
 		// we do this in order to be able to still support
 		// includes without many breaking changes.
 		p.pushKey(it.val)
-
 		if p.pedantic {
 			p.pushItemKey(it)
 		}
@@ -252,7 +225,6 @@ func (p *parser) processItem(it item, fp string) error {
 		}
 		// Process a suffix
 		suffix := strings.ToLower(strings.TrimSpace(it.val[lastDigit:]))
-
 		switch suffix {
 		case "":
 			setValue(it, num)
@@ -300,7 +272,6 @@ func (p *parser) processItem(it item, fp string) error {
 		default:
 			return fmt.Errorf("expected boolean value, but got '%s'", it.val)
 		}
-
 	case itemDatetime:
 		dt, err := time.Parse("2006-01-02T15:04:05Z", it.val)
 		if err != nil {
@@ -325,7 +296,6 @@ func (p *parser) processItem(it item, fp string) error {
 			return fmt.Errorf("variable reference for '%s' on line %d can not be found",
 				it.val, it.line)
 		}
-
 		if p.pedantic {
 			switch tk := value.(type) {
 			case *token:
@@ -355,7 +325,6 @@ func (p *parser) processItem(it item, fp string) error {
 		}
 		for k, v := range m {
 			p.pushKey(k)
-
 			if p.pedantic {
 				switch tk := v.(type) {
 				case *token:
@@ -365,7 +334,6 @@ func (p *parser) processItem(it item, fp string) error {
 			p.setValue(v)
 		}
 	}
-
 	return nil
 }
 
@@ -385,7 +353,6 @@ func (p *parser) lookupVariable(varReference string) (any, bool, error) {
 	if strings.HasPrefix(varReference, bcryptPrefix) {
 		return "$" + varReference, true, nil
 	}
-
 	// Loop through contexts currently on the stack.
 	for i := len(p.ctxs) - 1; i >= 0; i-- {
 		ctx := p.ctxs[i]
@@ -396,7 +363,6 @@ func (p *parser) lookupVariable(varReference string) (any, bool, error) {
 			}
 		}
 	}
-
 	// If we are here, we have exhausted our context maps and still not found anything.
 	// Parse from the environment.
 	if vStr, ok := os.LookupEnv(varReference); ok {
@@ -410,20 +376,16 @@ func (p *parser) lookupVariable(varReference string) (any, bool, error) {
 	}
 	return nil, false, nil
 }
-
 func (p *parser) setValue(val any) {
 	// Test to see if we are on an array or a map
-
 	// Array processing
 	if ctx, ok := p.ctx.([]any); ok {
 		p.ctx = append(ctx, val)
 		p.ctxs[len(p.ctxs)-1] = p.ctx
 	}
-
 	// Map processing
 	if ctx, ok := p.ctx.(map[string]any); ok {
 		key := p.popKey()
-
 		if p.pedantic {
 			// Change the position to the beginning of the key
 			// since more useful when reporting errors.

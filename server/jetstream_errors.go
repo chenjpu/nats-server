@@ -17,7 +17,6 @@ func Unless(err error) ErrorOption {
 		opts.err = err
 	}
 }
-
 func parseOpts(opts []ErrorOption) *errOpts {
 	eopts := &errOpts{}
 	for _, opt := range opts {
@@ -33,61 +32,54 @@ func IsNatsErr(err error, ids ...ErrorIdentifier) bool {
 	if err == nil {
 		return false
 	}
-
 	ce, ok := err.(*ApiError)
 	if !ok || ce == nil {
 		return false
 	}
-
 	for _, id := range ids {
 		ae, ok := ApiErrors[id]
 		if !ok || ae == nil {
 			continue
 		}
-
 		if ce.ErrCode == ae.ErrCode {
 			return true
 		}
 	}
-
 	return false
 }
 
 // ApiError is included in all responses if there was an error.
 type ApiError struct {
+	Description string `json:"description,omitempty"`
 	Code        int    `json:"code"`
 	ErrCode     uint16 `json:"err_code,omitempty"`
-	Description string `json:"description,omitempty"`
 }
 
 // ErrorsData is the source data for generated errors as found in errors.json
 type ErrorsData struct {
 	Constant    string `json:"constant"`
-	Code        int    `json:"code"`
-	ErrCode     uint16 `json:"error_code"`
 	Description string `json:"description"`
 	Comment     string `json:"comment"`
 	Help        string `json:"help"`
 	URL         string `json:"url"`
 	Deprecates  string `json:"deprecates"`
+	Code        int    `json:"code"`
+	ErrCode     uint16 `json:"error_code"`
 }
 
 func (e *ApiError) Error() string {
 	return fmt.Sprintf("%s (%d)", e.Description, e.ErrCode)
 }
-
 func (e *ApiError) toReplacerArgs(replacements []any) []string {
 	var (
 		ra  []string
 		key string
 	)
-
 	for i, replacement := range replacements {
 		if i%2 == 0 {
 			key = replacement.(string)
 			continue
 		}
-
 		switch v := replacement.(type) {
 		case string:
 			ra = append(ra, key, v)
@@ -97,6 +89,5 @@ func (e *ApiError) toReplacerArgs(replacements []any) []string {
 			ra = append(ra, key, fmt.Sprintf("%v", v))
 		}
 	}
-
 	return ra
 }

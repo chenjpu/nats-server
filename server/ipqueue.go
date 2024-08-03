@@ -10,7 +10,6 @@
 // WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 // See the License for the specific language governing permissions and
 // limitations under the License.
-
 package server
 
 import (
@@ -22,21 +21,19 @@ const ipQueueDefaultMaxRecycleSize = 4 * 1024
 
 // This is a generic intra-process queue.
 type ipQueue[T any] struct {
+	ch         chan struct{}
+	pool       *sync.Pool
+	m          *sync.Map
+	name       string
+	elts       []T
 	inprogress int64
+	pos        int
+	mrs        int
 	sync.Mutex
-	ch   chan struct{}
-	elts []T
-	pos  int
-	pool *sync.Pool
-	mrs  int
-	name string
-	m    *sync.Map
 }
-
 type ipQueueOpts struct {
 	maxRecycleSize int
 }
-
 type ipQueueOpt func(*ipQueueOpts)
 
 // This option allows to set the maximum recycle size when attempting
@@ -46,7 +43,6 @@ func ipQueue_MaxRecycleSize(max int) ipQueueOpt {
 		o.maxRecycleSize = max
 	}
 }
-
 func newIPQueue[T any](s *Server, name string, opts ...ipQueueOpt) *ipQueue[T] {
 	qo := ipQueueOpts{maxRecycleSize: ipQueueDefaultMaxRecycleSize}
 	for _, o := range opts {
@@ -119,7 +115,6 @@ func (q *ipQueue[T]) pop() []T {
 	q.Unlock()
 	return elts
 }
-
 func (q *ipQueue[T]) resetAndReturnToPool(elts *[]T) {
 	(*elts) = (*elts)[:0]
 	q.pool.Put(elts)

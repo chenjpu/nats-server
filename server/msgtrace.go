@@ -10,7 +10,6 @@
 // WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 // See the License for the specific language governing permissions and
 // limitations under the License.
-
 package server
 
 import (
@@ -29,7 +28,6 @@ const (
 	MsgTraceHop           = "Nats-Trace-Hop"
 	MsgTraceOriginAccount = "Nats-Trace-Origin-Account"
 	MsgTraceOnly          = "Nats-Trace-Only"
-
 	// External trace header. Note that this header is normally in lower
 	// case (https://www.w3.org/TR/trace-context/#header-name). Vendors
 	// MUST expect the header in any case (upper, lower, mixed), and
@@ -53,83 +51,71 @@ const (
 type MsgTraceEvent struct {
 	Server  ServerInfo      `json:"server"`
 	Request MsgTraceRequest `json:"request"`
-	Hops    int             `json:"hops,omitempty"`
 	Events  MsgTraceEvents  `json:"events"`
+	Hops    int             `json:"hops,omitempty"`
 }
-
 type MsgTraceRequest struct {
 	// We are not making this an http.Header so that header name case is preserved.
 	Header  map[string][]string `json:"header,omitempty"`
 	MsgSize int                 `json:"msgsize,omitempty"`
 }
-
 type MsgTraceEvents []MsgTrace
-
 type MsgTrace interface {
 	new() MsgTrace
 	typ() MsgTraceType
 }
-
 type MsgTraceBase struct {
-	Type      MsgTraceType `json:"type"`
 	Timestamp time.Time    `json:"ts"`
+	Type      MsgTraceType `json:"type"`
 }
-
 type MsgTraceIngress struct {
 	MsgTraceBase
-	Kind    int    `json:"kind"`
-	CID     uint64 `json:"cid"`
 	Name    string `json:"name,omitempty"`
 	Account string `json:"acc"`
 	Subject string `json:"subj"`
 	Error   string `json:"error,omitempty"`
+	Kind    int    `json:"kind"`
+	CID     uint64 `json:"cid"`
 }
-
 type MsgTraceSubjectMapping struct {
 	MsgTraceBase
 	MappedTo string `json:"to"`
 }
-
 type MsgTraceStreamExport struct {
 	MsgTraceBase
 	Account string `json:"acc"`
 	To      string `json:"to"`
 }
-
 type MsgTraceServiceImport struct {
 	MsgTraceBase
 	Account string `json:"acc"`
 	From    string `json:"from"`
 	To      string `json:"to"`
 }
-
 type MsgTraceJetStream struct {
 	MsgTraceBase
 	Stream     string `json:"stream"`
 	Subject    string `json:"subject,omitempty"`
-	NoInterest bool   `json:"nointerest,omitempty"`
 	Error      string `json:"error,omitempty"`
+	NoInterest bool   `json:"nointerest,omitempty"`
 }
-
 type MsgTraceEgress struct {
 	MsgTraceBase
-	Kind         int    `json:"kind"`
-	CID          uint64 `json:"cid"`
-	Name         string `json:"name,omitempty"`
-	Hop          string `json:"hop,omitempty"`
-	Account      string `json:"acc,omitempty"`
-	Subscription string `json:"sub,omitempty"`
-	Queue        string `json:"queue,omitempty"`
-	Error        string `json:"error,omitempty"`
-
 	// This is for applications that unmarshal the trace events
 	// and want to link an egress to route/leaf/gateway with
 	// the MsgTraceEvent from that server.
-	Link *MsgTraceEvent `json:"-"`
+	Link         *MsgTraceEvent `json:"-"`
+	Name         string         `json:"name,omitempty"`
+	Hop          string         `json:"hop,omitempty"`
+	Account      string         `json:"acc,omitempty"`
+	Subscription string         `json:"sub,omitempty"`
+	Queue        string         `json:"queue,omitempty"`
+	Error        string         `json:"error,omitempty"`
+	Kind         int            `json:"kind"`
+	CID          uint64         `json:"cid"`
 }
 
 // -------------------------------------------------------------
-
 func (t MsgTraceBase) typ() MsgTraceType     { return t.Type }
 func (MsgTraceIngress) new() MsgTrace        { return &MsgTraceIngress{} }
 func (MsgTraceSubjectMapping) new() MsgTrace { return &MsgTraceSubjectMapping{} }
@@ -171,7 +157,6 @@ func (t *MsgTraceEvents) UnmarshalJSON(data []byte) error {
 	}
 	return nil
 }
-
 func getTraceAs[T MsgTrace](e any) *T {
 	v, ok := e.(*T)
 	if ok {
@@ -179,14 +164,12 @@ func getTraceAs[T MsgTrace](e any) *T {
 	}
 	return nil
 }
-
 func (t *MsgTraceEvent) Ingress() *MsgTraceIngress {
 	if len(t.Events) < 1 {
 		return nil
 	}
 	return getTraceAs[MsgTraceIngress](t.Events[0])
 }
-
 func (t *MsgTraceEvent) SubjectMapping() *MsgTraceSubjectMapping {
 	for _, e := range t.Events {
 		if e.typ() == MsgTraceSubjectMappingType {
@@ -195,7 +178,6 @@ func (t *MsgTraceEvent) SubjectMapping() *MsgTraceSubjectMapping {
 	}
 	return nil
 }
-
 func (t *MsgTraceEvent) StreamExports() []*MsgTraceStreamExport {
 	var se []*MsgTraceStreamExport
 	for _, e := range t.Events {
@@ -205,7 +187,6 @@ func (t *MsgTraceEvent) StreamExports() []*MsgTraceStreamExport {
 	}
 	return se
 }
-
 func (t *MsgTraceEvent) ServiceImports() []*MsgTraceServiceImport {
 	var si []*MsgTraceServiceImport
 	for _, e := range t.Events {
@@ -215,7 +196,6 @@ func (t *MsgTraceEvent) ServiceImports() []*MsgTraceServiceImport {
 	}
 	return si
 }
-
 func (t *MsgTraceEvent) JetStream() *MsgTraceJetStream {
 	for _, e := range t.Events {
 		if e.typ() == MsgTraceJetStreamType {
@@ -224,7 +204,6 @@ func (t *MsgTraceEvent) JetStream() *MsgTraceJetStream {
 	}
 	return nil
 }
-
 func (t *MsgTraceEvent) Egresses() []*MsgTraceEgress {
 	var eg []*MsgTraceEgress
 	for _, e := range t.Events {
@@ -247,16 +226,16 @@ const (
 )
 
 type msgTrace struct {
-	ready int32
 	srv   *Server
 	acc   *Account
+	event *MsgTraceEvent
+	js    *MsgTraceJetStream
 	// Origin account name, set only if acc is nil when acc lookup failed.
 	oan   string
 	dest  string
-	event *MsgTraceEvent
-	js    *MsgTraceJetStream
 	hop   string
 	nhop  string
+	ready int32
 	tonly bool // Will only trace the message, not do delivery.
 	ct    compressionType
 }
@@ -285,7 +264,6 @@ func (c *client) msgTraceSupport() bool {
 	// Exclude client connection from the protocol check.
 	return c.kind == CLIENT || c.opts.Protocol >= MsgTraceProto
 }
-
 func getConnName(c *client) string {
 	switch c.kind {
 	case ROUTER:
@@ -303,7 +281,6 @@ func getConnName(c *client) string {
 	}
 	return c.opts.Name
 }
-
 func getCompressionType(cts string) compressionType {
 	if cts == _EMPTY_ {
 		return noCompression
@@ -317,7 +294,6 @@ func getCompressionType(cts string) compressionType {
 	}
 	return unsupportedCompression
 }
-
 func (c *client) initMsgTrace() *msgTrace {
 	// The code in the "if" statement is only running in test mode.
 	if msgTraceRunInTests {
@@ -480,7 +456,6 @@ func (c *client) initMsgTrace() *msgTrace {
 	}
 	return c.pa.trace
 }
-
 func sample(sampling int) bool {
 	// Option parsing should ensure that sampling is [1..100], but consider
 	// any value outside of this range to be 100%.
@@ -499,7 +474,6 @@ func sample(sampling int) bool {
 // as suggested by the spec, but also to make it easier to disable the header
 // when needed.
 func genHeaderMapIfTraceHeadersPresent(hdr []byte) (map[string][]string, bool) {
-
 	var (
 		_keys               = [64][]byte{}
 		_vals               = [64][]byte{}
@@ -511,15 +485,12 @@ func genHeaderMapIfTraceHeadersPresent(hdr []byte) (map[string][]string, bool) {
 	if !bytes.HasPrefix(hdr, stringToBytes(hdrLine)) {
 		return nil, false
 	}
-
 	traceDestHdrAsBytes := stringToBytes(MsgTraceDest)
 	traceParentHdrAsBytes := stringToBytes(traceParentHdr)
 	crLFAsBytes := stringToBytes(CR_LF)
 	dashAsBytes := stringToBytes("-")
-
 	keys := _keys[:0]
 	vals := _vals[:0]
-
 	for i := len(hdrLine); i < len(hdr); {
 		// Search for key/val delimiter
 		del := bytes.IndexByte(hdr[i:], ':')
@@ -537,7 +508,6 @@ func genHeaderMapIfTraceHeadersPresent(hdr []byte) (map[string][]string, bool) {
 		if len(key) > 0 {
 			val := bytes.Trim(hdr[valStart:valStart+nl], " \t")
 			vals = append(vals, val)
-
 			// Check for the external trace header.
 			if bytes.EqualFold(key, traceParentHdrAsBytes) {
 				// Rewrite the header using lower case if needed.
@@ -619,7 +589,6 @@ func (c *client) initAndSendIngressErrEvent(hdr []byte, dest string, ingressErro
 func (t *msgTrace) traceOnly() bool {
 	return t != nil && t.tonly
 }
-
 func (t *msgTrace) setOriginAccountHeaderIfNeeded(c *client, acc *Account, msg []byte) []byte {
 	var oan string
 	// If t.acc is set, only check that, not t.oan.
@@ -635,7 +604,6 @@ func (t *msgTrace) setOriginAccountHeaderIfNeeded(c *client, acc *Account, msg [
 	}
 	return msg
 }
-
 func (t *msgTrace) setHopHeader(c *client, msg []byte) []byte {
 	e := t.event
 	e.Hops++
@@ -699,13 +667,11 @@ func enableTraceHeaders(msg []byte, positions []int) {
 		msg[pos] = firstChar[i]
 	}
 }
-
 func (t *msgTrace) setIngressError(err string) {
 	if i := t.event.Ingress(); i != nil {
 		i.Error = err
 	}
 }
-
 func (t *msgTrace) addSubjectMappingEvent(subj []byte) {
 	if t == nil {
 		return
@@ -718,7 +684,6 @@ func (t *msgTrace) addSubjectMappingEvent(subj []byte) {
 		MappedTo: string(subj),
 	})
 }
-
 func (t *msgTrace) addEgressEvent(dc *client, sub *subscription, err string) {
 	if t == nil {
 		return
@@ -755,7 +720,6 @@ func (t *msgTrace) addEgressEvent(dc *client, sub *subscription, err string) {
 	}
 	t.event.Events = append(t.event.Events, e)
 }
-
 func (t *msgTrace) addStreamExportEvent(dc *client, to []byte) {
 	if t == nil {
 		return
@@ -772,7 +736,6 @@ func (t *msgTrace) addStreamExportEvent(dc *client, to []byte) {
 		To:      string(to),
 	})
 }
-
 func (t *msgTrace) addServiceImportEvent(accName, from, to string) {
 	if t == nil {
 		return
@@ -787,7 +750,6 @@ func (t *msgTrace) addServiceImportEvent(accName, from, to string) {
 		To:      to,
 	})
 }
-
 func (t *msgTrace) addJetStreamEvent(streamName string) {
 	if t == nil {
 		return
@@ -801,7 +763,6 @@ func (t *msgTrace) addJetStreamEvent(streamName string) {
 	}
 	t.event.Events = append(t.event.Events, t.js)
 }
-
 func (t *msgTrace) updateJetStreamEvent(subject string, noInterest bool) {
 	if t == nil {
 		return
@@ -816,7 +777,6 @@ func (t *msgTrace) updateJetStreamEvent(subject string, noInterest bool) {
 	// was first added in addJetStreamEvent().
 	t.js.Timestamp = time.Now()
 }
-
 func (t *msgTrace) sendEventFromJetStream(err error) {
 	if t == nil {
 		return
@@ -830,7 +790,6 @@ func (t *msgTrace) sendEventFromJetStream(err error) {
 	}
 	t.sendEvent()
 }
-
 func (t *msgTrace) sendEvent() {
 	if t == nil {
 		return

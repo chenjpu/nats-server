@@ -10,7 +10,6 @@
 // WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 // See the License for the specific language governing permissions and
 // limitations under the License.
-
 package server
 
 import (
@@ -20,16 +19,14 @@ import (
 	"crypto/sha256"
 	"errors"
 	"fmt"
+	"github.com/nats-io/jwt/v2" // only used to decode, not for storage
+	"github.com/nats-io/nkeys"
 	"math"
 	"os"
 	"path/filepath"
 	"strings"
 	"sync"
 	"time"
-
-	"github.com/nats-io/nkeys"
-
-	"github.com/nats-io/jwt/v2" // only used to decode, not for storage
 )
 
 const (
@@ -41,26 +38,21 @@ func validatePathExists(path string, dir bool) (string, error) {
 	if path == _EMPTY_ {
 		return _EMPTY_, errors.New("path is not specified")
 	}
-
 	abs, err := filepath.Abs(path)
 	if err != nil {
 		return _EMPTY_, fmt.Errorf("error parsing path [%s]: %v", abs, err)
 	}
-
 	var finfo os.FileInfo
 	if finfo, err = os.Stat(abs); os.IsNotExist(err) {
 		return _EMPTY_, fmt.Errorf("the path [%s] doesn't exist", abs)
 	}
-
 	mode := finfo.Mode()
 	if dir && mode.IsRegular() {
 		return _EMPTY_, fmt.Errorf("the path [%s] is not a directory", abs)
 	}
-
 	if !dir && mode.IsDir() {
 		return _EMPTY_, fmt.Errorf("the path [%s] is not a file", abs)
 	}
-
 	return abs, nil
 }
 
@@ -75,15 +67,15 @@ type JWTChanged func(publicKey string)
 // DirJWTStore implements the JWT Store interface, keeping JWTs in an optionally sharded
 // directory structure
 type DirJWTStore struct {
-	sync.Mutex
-	directory  string
-	shard      bool
-	readonly   bool
-	deleteType deleteType
 	operator   map[string]struct{}
 	expiration *expirationTracker
 	changed    JWTChanged
 	deleted    JWTChanged
+	directory  string
+	deleteType deleteType
+	sync.Mutex
+	shard    bool
+	readonly bool
 }
 
 func newDir(dirPath string, create bool) (string, error) {
@@ -189,27 +181,21 @@ func NewExpiringDirJWTStore(dirPath string, shard bool, create bool, delete dele
 	}
 	return theStore, err
 }
-
 func (store *DirJWTStore) IsReadOnly() bool {
 	return store.readonly
 }
-
 func (store *DirJWTStore) LoadAcc(publicKey string) (string, error) {
 	return store.load(publicKey)
 }
-
 func (store *DirJWTStore) SaveAcc(publicKey string, theJWT string) error {
 	return store.save(publicKey, theJWT)
 }
-
 func (store *DirJWTStore) LoadAct(hash string) (string, error) {
 	return store.load(hash)
 }
-
 func (store *DirJWTStore) SaveAct(hash string, theJWT string) error {
 	return store.save(hash, theJWT)
 }
-
 func (store *DirJWTStore) Close() {
 	store.Lock()
 	defer store.Unlock()
@@ -335,7 +321,6 @@ func (store *DirJWTStore) Merge(pack string) error {
 	}
 	return nil
 }
-
 func (store *DirJWTStore) Reload() error {
 	store.Lock()
 	exp := store.expiration
@@ -373,7 +358,6 @@ func (store *DirJWTStore) Reload() error {
 		return nil
 	})
 }
-
 func (store *DirJWTStore) pathForKey(publicKey string) string {
 	if len(publicKey) < 2 {
 		return _EMPTY_
@@ -445,7 +429,6 @@ func (store *DirJWTStore) write(path string, publicKey string, theJWT string) (b
 	}
 	return true, nil
 }
-
 func (store *DirJWTStore) delete(publicKey string) error {
 	if store.readonly {
 		return fmt.Errorf("store is read-only")
@@ -545,7 +528,6 @@ func (store *DirJWTStore) saveIfNewer(publicKey string, theJWT string) error {
 	}
 	return nil
 }
-
 func xorAssign(lVal *[sha256.Size]byte, rVal [sha256.Size]byte) {
 	for i := range rVal {
 		(*lVal)[i] ^= rVal[i]
@@ -565,39 +547,36 @@ func (store *DirJWTStore) Hash() [sha256.Size]byte {
 
 // An jwtItem is something managed by the priority queue
 type jwtItem struct {
-	index      int
 	publicKey  string
+	index      int
 	expiration int64 // consists of unix time of expiration (ttl when set or jwt expiration) in seconds
 	hash       [sha256.Size]byte
 }
 
 // A expirationTracker implements heap.Interface and holds Items.
 type expirationTracker struct {
-	heap         []*jwtItem // sorted by jwtItem.expiration
 	idx          map[string]*list.Element
 	lru          *list.List // keep which jwt are least used
-	limit        int64      // limit how many jwt are being tracked
-	evictOnLimit bool       // when limit is hit, error or evict using lru
+	quit         chan struct{}
+	heap         []*jwtItem // sorted by jwtItem.expiration
+	wg           sync.WaitGroup
+	limit        int64 // limit how many jwt are being tracked
 	ttl          time.Duration
 	hash         [sha256.Size]byte // xor of all jwtItem.hash in idx
-	quit         chan struct{}
-	wg           sync.WaitGroup
+	evictOnLimit bool              // when limit is hit, error or evict using lru
 }
 
 func (q *expirationTracker) Len() int { return len(q.heap) }
-
 func (q *expirationTracker) Less(i, j int) bool {
 	pq := q.heap
 	return pq[i].expiration < pq[j].expiration
 }
-
 func (q *expirationTracker) Swap(i, j int) {
 	pq := q.heap
 	pq[i], pq[j] = pq[j], pq[i]
 	pq[i].index = i
 	pq[j].index = j
 }
-
 func (q *expirationTracker) Push(x any) {
 	n := len(q.heap)
 	item := x.(*jwtItem)
@@ -605,7 +584,6 @@ func (q *expirationTracker) Push(x any) {
 	q.heap = append(q.heap, item)
 	q.idx[item.publicKey] = q.lru.PushBack(item)
 }
-
 func (q *expirationTracker) Pop() any {
 	old := q.heap
 	n := len(old)
@@ -617,7 +595,6 @@ func (q *expirationTracker) Pop() any {
 	delete(q.idx, item.publicKey)
 	return item
 }
-
 func (pq *expirationTracker) updateTrack(publicKey string) {
 	if e, ok := pq.idx[publicKey]; ok {
 		i := e.Value.(*jwtItem)
@@ -631,7 +608,6 @@ func (pq *expirationTracker) updateTrack(publicKey string) {
 		}
 	}
 }
-
 func (pq *expirationTracker) unTrack(publicKey string) {
 	if it, ok := pq.idx[publicKey]; ok {
 		xorAssign(&pq.hash, it.Value.(*jwtItem).hash)
@@ -639,7 +615,6 @@ func (pq *expirationTracker) unTrack(publicKey string) {
 		delete(pq.idx, publicKey)
 	}
 }
-
 func (pq *expirationTracker) track(publicKey string, hash *[sha256.Size]byte, theJWT string) {
 	var exp int64
 	// prioritize ttl over expiration
@@ -668,7 +643,6 @@ func (pq *expirationTracker) track(publicKey string, hash *[sha256.Size]byte, th
 	}
 	xorAssign(&pq.hash, *hash) // add in new hash
 }
-
 func (pq *expirationTracker) close() {
 	if pq == nil || pq.quit == nil {
 		return
@@ -676,7 +650,6 @@ func (pq *expirationTracker) close() {
 	close(pq.quit)
 	pq.quit = nil
 }
-
 func (store *DirJWTStore) startExpiring(reCheck time.Duration, limit int64, evictOnLimit bool, ttl time.Duration) {
 	store.Lock()
 	defer store.Unlock()
